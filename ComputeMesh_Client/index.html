@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dllmchat dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        }
+
+        .glass-effect {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(8px);
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.8);
+                opacity: 0.5;
+            }
+            100% {
+                transform: scale(1.3);
+                opacity: 0;
+            }
+        }
+
+        .status-indicator::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+
+        .connected.status-indicator::before {
+            background-color: #22c55e;
+        }
+
+        .disconnected.status-indicator::before {
+            background-color: #ef4444;
+        }
+    </style>
+</head>
+<body class="min-h-screen gradient-bg text-gray-100">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-12">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-blue-500 rounded-lg">
+                    <i data-feather="terminal" class="h-6 w-6 text-white"></i>
+                </div>
+                <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent">
+                    dllmchat
+                </h1>
+            </div>
+            <div id="logout-btn" class="cursor-pointer group">
+                <div class="flex items-center space-x-2 px-4 py-2 rounded-lg border border-gray-600 hover:border-gray-400 transition-all duration-300">
+                    <span class="text-gray-400 group-hover:text-gray-200">Logout</span>
+                    <i data-feather="log-out" class="h-4 w-4 text-gray-400 group-hover:text-gray-200"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Login Section -->
+        <div id="login-section" class="glass-effect rounded-xl p-8 max-w-md mx-auto transform transition-all duration-300">
+            <h2 class="text-2xl font-semibold mb-8 text-center">Welcome Back</h2>
+            <div class="space-y-6">
+                <div class="space-y-2">
+                    <label for="username" class="text-sm font-medium text-gray-300">Username</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center">
+                            <i data-feather="user" class="h-5 w-5 text-gray-400"></i>
+                        </div>
+                        <input type="text" id="username" 
+                               class="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-500 text-gray-200"
+                               placeholder="Enter your username">
+                    </div>
+                </div>
+                
+                <div class="space-y-2">
+                    <label for="password" class="text-sm font-medium text-gray-300">Password</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center">
+                            <i data-feather="lock" class="h-5 w-5 text-gray-400"></i>
+                        </div>
+                        <input type="password" id="password" 
+                               class="w-full bg-gray-800/50 border border-gray-700 rounded-lg pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-500 text-gray-200"
+                               placeholder="Enter your password">
+                    </div>
+                </div>
+
+                <p id="login-status" class="text-red-400 text-sm min-h-[20px]"></p>
+
+                <button id="login-btn" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 ease-in-out transform hover:translate-y-[-2px] active:translate-y-[0px]">
+                    Connect to Server
+                </button>
+            </div>
+        </div>
+
+        <!-- Command Section -->
+        <div id="command-section" class="hidden space-y-8">
+            <div class="glass-effect rounded-xl p-6">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0 mb-8">
+                    <div class="flex items-center space-x-4">
+                        <div class="relative">
+                            <div id="connection-indicator" class="status-indicator disconnected relative w-3 h-3 rounded-full bg-red-500"></div>
+                        </div>
+                        <h2 class="text-xl font-semibold">System Status</h2>
+                    </div>
+                    <div class="flex space-x-6">
+                        <div class="flex flex-col">
+                            <span class="text-sm text-gray-400">Server Status</span>
+                            <span id="port-display" class="font-medium">Waiting...</span>
+                        </div>
+                        <div class="flex flex-col">
+                            <span class="text-sm text-gray-400">WebSocket</span>
+                            <span id="ws-status" class="font-medium text-red-400">Disconnected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-effect rounded-xl p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-xl font-semibold">System Logs</h3>
+                    <div class="flex items-center space-x-2 text-gray-400 text-sm">
+                        <i data-feather="clock" class="h-4 w-4"></i>
+                        <span>Real-time updates</span>
+                    </div>
+                </div>
+                <div class="relative">
+                    <textarea id="log-area" 
+                             readonly
+                             class="h-[400px] w-full resize-none bg-gray-900/50 rounded-lg p-4 text-sm font-mono text-gray-300 border border-gray-700 focus:outline-none focus:border-gray-600"
+                    ></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Feather Icons
+        document.addEventListener('DOMContentLoaded', () => {
+            feather.replace();
+            
+            // Update connection indicator based on WebSocket status
+            const wsStatus = document.getElementById('ws-status');
+            const connectionIndicator = document.getElementById('connection-indicator');
+            
+            const updateConnectionStatus = (text, connected) => {
+                wsStatus.textContent = text;
+                wsStatus.className = connected ? 'font-medium text-green-400' : 'font-medium text-red-400';
+                connectionIndicator.className = `status-indicator relative w-3 h-3 rounded-full ${connected ? 'connected bg-green-500' : 'disconnected bg-red-500'}`;
+            };
+
+            // Example of updating status (you'll need to integrate this with your actual WebSocket logic)
+            window.updateStatus = updateConnectionStatus;
+        });
+    </script>
+    <script src="renderer.js"></script>
+</body>
+</html>

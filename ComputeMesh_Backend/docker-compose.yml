@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://dllm_owner:npg_S7ZoNmnID5aq@ep-muddy-band-a8yv7ycm-pooler.eastus2.azure.neon.tech/dllm?sslmode=require
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+volumes:
+  redis_data:

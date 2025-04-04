@@ -1,0 +1,4 @@
+__pycache__/
+test_old.db
+nohup.out
+venv

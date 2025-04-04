@@ -1,0 +1,99 @@
+{
+    "name": "ComputeMesh",
+    "version": "0.0.1",
+    "main": "main.js",
+    "scripts": {
+        "build": "cd frontend && npm run build",
+        "start": "cross-env NODE_ENV=development electron .",
+        "dev:electron": "electron .",
+        "dev:next": "cd frontend && next -p 4000",
+        "dev": "concurrently \"npm run dev:next\" \"wait-on http://localhost:3567 && cross-env NODE_ENV=development npm run dev:electron\"",
+        "dist": "electron-builder",
+        "publish": "electron-builder -p always"
+    },
+    "dependencies": {
+        "axios": "^1.4.0",
+        "electron-log": "^5.3.0",
+        "electron-store": "^10.0.0",
+        "electron-updater": "^6.3.9",
+        "get-port": "^5.1.1",
+        "keytar": "^7.9.0",
+        "next": "^14.0.0",
+        "node-machine-id": "^1.1.12",
+        "ws": "^8.13.0"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.2",
+        "cross-env": "^7.0.3",
+        "electron": "^25.3.1",
+        "electron-builder": "^24.6.4",
+        "wait-on": "^8.0.2"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "description": "ComputeMesh Application",
+    "build": {
+        "appId": "com.dllmchat.app",
+        "productName": "dllmchat",
+        "directories": {
+            "output": "dist"
+        },
+        "files": [
+            "**/*",
+            "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+            "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+            "!**/node_modules/*.d.ts",
+            "!**/node_modules/.bin",
+            "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+            "!.editorconfig",
+            "!**/._*",
+            "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+            "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+            "!**/{appveyor.yml,.travis.yml,circle.yml}",
+            "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+        ],
+        "extraResources": [
+            {
+                "from": "win/",
+                "to": "win",
+                "filter": [
+                    "**/*"
+                ]
+            },
+            {
+                "from": "out/",
+                "to": "out",
+                "filter": [
+                    "**/*"
+                ]
+            }
+        ],
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ],
+            "icon": "build/icon.ico"
+        },
+        "nsis": {
+            "oneClick": true,
+            "perMachine": false,
+            "allowElevation": true,
+            "allowToChangeInstallationDirectory": false,
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true,
+            "differentialPackage": false,
+            "include": "installer.nsh",
+            "deleteAppDataOnUninstall": false,
+            "runAfterFinish": true,
+            "artifactName": "${productName}-Setup-${version}.${ext}"
+        },
+        "removePackageScripts": true,
+        "afterPack": "./build/afterPack.js"
+    }
+}

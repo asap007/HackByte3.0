@@ -1,0 +1,4 @@
+dist/
+.env
+win
+node_modules
