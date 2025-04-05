@@ -11,8 +11,8 @@ let isCleaningUp = false;
 let isQuitting = false;
 
 const SERVER_PATH = app.isPackaged
-    ? path.join(process.resourcesPath, 'win', 'dllm_main.exe')
-    : path.join(__dirname, 'win', 'dllm_main.exe');
+    ? path.join(process.resourcesPath, 'win', 'ComputeMesh_main.exe')
+    : path.join(__dirname, 'win', 'ComputeMesh_main.exe');
 
 // Simple logging
 function log(message, level = 'info') {
@@ -104,7 +104,7 @@ function createWindow() {
     // Remove the application menu completely
     mainWindow.removeMenu();
 
-    const startUrl = path.join(__dirname,'frontend', 'out', 'index.html');
+    const startUrl = path.join(__dirname, 'out', 'index.html');
     mainWindow.loadFile(startUrl);
 
     mainWindow.once('ready-to-show', () => {

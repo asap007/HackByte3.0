@@ -35,7 +35,7 @@ export function Leaderboard() {
 
   const fetchLeaderboardData = async () => {
     try {
-      const response = await fetch("https://acehack4-0-backend.onrender.com/leaderboard/users");
+      const response = await fetch("https://hackbyte3-0.onrender.com/leaderboard/users");
       const data = await response.json();
       const sortedData = data.sort((a, b) => b.score - a.score);
       setLeaderboardData(sortedData);
@@ -46,7 +46,7 @@ export function Leaderboard() {
 
   const fetchPublicStats = async () => {
     try {
-      const response = await fetch("https://acehack4-0-backend.onrender.com/public-stats");
+      const response = await fetch("https://hackbyte3-0.onrender.com/public-stats");
       const data = await response.json();
       setActiveNodes(data.active_nodes);
     } catch (error) {
@@ -62,7 +62,7 @@ export function Leaderboard() {
         return;
       }
 
-      const response = await fetch("https://acehack4-0-backend.onrender.com/user", {
+      const response = await fetch("https://hackbyte3-0.onrender.com/user", {
         headers: {
           'Authorization': `Bearer ${token}`
         }

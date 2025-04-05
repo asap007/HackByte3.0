@@ -34,8 +34,8 @@
     "license": "ISC",
     "description": "ComputeMesh Application",
     "build": {
-        "appId": "com.dllmchat.app",
-        "productName": "dllmchat",
+        "appId": "com.ComputeMesh.app",
+        "productName": "ComputeMesh",
         "directories": {
             "output": "dist"
         },

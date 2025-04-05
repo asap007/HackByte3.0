@@ -156,7 +156,7 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) return
 
-      const response = await fetch("https://acehack4-0-backend.onrender.com/v1/models/status", {
+      const response = await fetch("https://hackbyte3-0.onrender.com/v1/models/status", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -241,7 +241,7 @@ function Dashboard() {
       if (!token) throw new Error("No authentication token found")
 
       // Pull the model
-      const pullResponse = await fetch("https://acehack4-0-backend.onrender.com/v1/models/pull", {
+      const pullResponse = await fetch("https://hackbyte3-0.onrender.com/v1/models/pull", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -301,7 +301,7 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) throw new Error("No authentication token found")
 
-      const response = await fetch("https://acehack4-0-backend.onrender.com/v1/chat/completions", {
+      const response = await fetch("https://hackbyte3-0.onrender.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
