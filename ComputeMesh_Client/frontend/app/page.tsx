@@ -13,7 +13,7 @@ import { LoginForm } from "../components/login-form"
 import { ForgotPassword } from "../components/forgot-password"
 import { Head } from "react-day-picker"
 import UpdateModal from "../components/update-modal";
-  
+
 type AuthState = "login" | "forgotPassword" | "authenticated"
 
 interface UserData {
@@ -22,6 +22,7 @@ interface UserData {
   profile_picture: string | null
   dllm_tokens: number
   referral_link: string | null
+  wallet_address: string | null
 }
 
 export default function Dashboard() {
@@ -30,10 +31,12 @@ export default function Dashboard() {
   const [userData, setUserData] = useState<UserData | null>(null)
   const [resetMessage, setResetMessage] = useState("")
   const [updateReady, setUpdateReady] = useState(false)
+  const [walletModalOpen, setWalletModalOpen] = useState(false)
+  const [walletAddress, setWalletAddress] = useState("")
+  const [walletError, setWalletError] = useState("")
 
   useEffect(() => {
     if (window.electronAPI) {
-      // Only listen for update downloaded event
       window.electronAPI.onUpdateDownloaded(() => {
         setUpdateReady(true);
       });
@@ -43,7 +46,7 @@ export default function Dashboard() {
   useEffect(() => {
     const storedToken = localStorage.getItem('authToken');
     const explicitLogout = localStorage.getItem('explicitLogout');
-    
+
     if (storedToken && explicitLogout !== 'true') {
       validateToken(storedToken);
     }
@@ -52,10 +55,7 @@ export default function Dashboard() {
   useEffect(() => {
     const registerDevice = async () => {
       try {
-        // Get device ID via IPC
         const deviceId = await window.electronAPI.getMachineId();
-        
-        // Send registration request
         await axios.post('http://localhost:8000/device-registration', {
           device_id: deviceId
         }, {
@@ -63,13 +63,12 @@ export default function Dashboard() {
             'Content-Type': 'application/json'
           }
         });
-        
         console.log('Device registered successfully');
       } catch (error) {
         console.error('Device registration failed:', error);
       }
     };
-  
+
     registerDevice();
   }, []);
 
@@ -91,8 +90,8 @@ export default function Dashboard() {
 
   const handleLogin = async (receivedToken: string) => {
     localStorage.setItem('authToken', receivedToken);
-    localStorage.removeItem('explicitLogout'); // Clear the logout flag
-    
+    localStorage.removeItem('explicitLogout');
+
     try {
       const response = await axios.get('http://localhost:8000/user', {
         headers: { 'Authorization': `Bearer ${receivedToken}` }
@@ -108,7 +107,7 @@ export default function Dashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem('authToken');
-    localStorage.removeItem('updateDeferred'); // Add this line
+    localStorage.removeItem('updateDeferred');
     localStorage.setItem('explicitLogout', 'true');
     sessionStorage.removeItem('miningTime');
     sessionStorage.removeItem('miningPending');
@@ -116,7 +115,6 @@ export default function Dashboard() {
     setUserData(null);
     setAuthState("login");
   };
-  
 
   const handleForgotPassword = () => {
     setAuthState("forgotPassword")
@@ -134,6 +132,35 @@ export default function Dashboard() {
 
   const handleSignup = () => {
     console.log("Navigate to signup page")
+  }
+
+  const validateAptosAddress = (address: string): boolean => {
+    // Basic Aptos address validation (0x followed by 64 hex characters)
+    return /^0x[0-9a-fA-F]{64}$/.test(address);
+  }
+
+  const handleConnectWallet = async () => {
+    if (!validateAptosAddress(walletAddress)) {
+      setWalletError("Please enter a valid Aptos address (0x followed by 64 hex characters)");
+      return;
+    }
+
+    try {
+      // Save wallet address to user profile
+      const response = await axios.patch(
+        'http://localhost:8000/user/wallet',
+        { wallet_address: walletAddress },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+
+      setUserData({ ...userData, wallet_address: walletAddress });
+      setWalletModalOpen(false);
+      setWalletAddress("");
+      setWalletError("");
+    } catch (error) {
+      console.error("Error saving wallet address:", error);
+      setWalletError("Failed to connect wallet. Please try again.");
+    }
   }
 
   if (authState === "login") {
@@ -156,52 +183,84 @@ export default function Dashboard() {
 
   if (authState === "forgotPassword") {
     return (
-              <ForgotPassword 
-          onResetPassword={handleResetPassword} 
-          onBackToLogin={handleBackToLogin} 
-        />
-          )
+      <ForgotPassword 
+        onResetPassword={handleResetPassword} 
+        onBackToLogin={handleBackToLogin} 
+      />
+    )
   }
 
   return (
     <div className="min-h-screen bg-[#0a0a14] flex">
-    {updateReady && <UpdateModal isAuthenticated={authState === "authenticated"} />}
+      {updateReady && <UpdateModal isAuthenticated={authState === "authenticated"} />}
+      
+      {/* Wallet Connection Modal */}
+      {walletModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a2e] p-6 rounded-lg w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-white">Connect Aptos Wallet</h2>
+              <button 
+                onClick={() => setWalletModalOpen(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-gray-400 mb-2">Enter your Aptos wallet address</label>
+              <input
+                type="text"
+                value={walletAddress}
+                onChange={(e) => setWalletAddress(e.target.value)}
+                placeholder="0x..."
+                className="w-full bg-[#12121f] border border-gray-700 rounded-md py-2 px-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              {walletError && (
+                <p className="mt-2 text-red-400 text-sm">{walletError}</p>
+              )}
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setWalletModalOpen(false)}
+                className="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConnectWallet}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1">
-      <Header />
+        <Header 
+          userData={userData} 
+          onConnectWallet={() => setWalletModalOpen(true)}
+        />
         <div className="mb-4"></div>
         <Navigation 
           onLogout={handleLogout} 
           userData={userData} 
         />
+        
         <main className="p-6 pt-0 pb-0">
           <div className="grid grid-cols-3 gap-6 mb-6">
             <TrendingAgentsCard />
             <MiningCard />
             <Leaderboard />
           </div>
-          
+
           <div className="space-y-4">
-            {/* <div className="bg-[#1a1a2e] p-4 rounded-lg">
-              <div className="flex items-start gap-4 mb-4">
-                <div className="p-2 bg-[#12121f] rounded">
-                  <svg
-                    className="w-4 h-4 text-gray-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                    <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-gray-400">
-                    We have an exciting news! Our mining bonus system is now more advantageous for GPU users than for ASIC users.
-                  </p>
-                </div>
-              </div>
-              <img src="/placeholder.svg" alt="Promotional Banner" className="w-full h-32 object-cover rounded-lg" />
-            </div> */}
             <SystemInfo />
             <StatusBar />
           </div>

@@ -23,7 +23,7 @@ export function ComingSoonPopup({ open, onClose }) {
   );
 }
 
-export function Header() {
+export function Header({ userData, onConnectWallet }) {
   const [isPopupOpen, setIsPopupOpen] = React.useState(false);
 
   return (
@@ -42,12 +42,32 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-4">
-        <Button 
-          className="bg-purple-500 hover:bg-purple-600"
-          onClick={() => setIsPopupOpen(true)}
-        >
-          Connect Wallet
-        </Button>
+        {userData?.wallet_address ? (
+          <div className="flex items-center gap-2">
+            <div className="bg-green-900/20 border border-green-700 rounded-lg px-3 py-1 flex items-center">
+              <svg className="w-4 h-4 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-green-200 text-sm">
+                {userData.wallet_address.substring(0, 6)}...{userData.wallet_address.substring(58)}
+              </span>
+            </div>
+            <Button 
+              variant="outline"
+              className="bg-gray-700 hover:bg-gray-600 text-white"
+              onClick={onConnectWallet}
+            >
+              Change
+            </Button>
+          </div>
+        ) : (
+          <Button 
+            className="bg-purple-500 hover:bg-purple-600"
+            onClick={onConnectWallet}
+          >
+            Connect Wallet
+          </Button>
+        )}
         <ComingSoonPopup 
           open={isPopupOpen} 
           onClose={() => setIsPopupOpen(false)} 
@@ -58,5 +78,3 @@ export function Header() {
 }
 
 export default Header;
-     
-

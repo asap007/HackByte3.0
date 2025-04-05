@@ -1,4 +1,3 @@
-# models.py
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from database import Base
@@ -13,6 +12,7 @@ class User(Base):
     profile_picture = Column(String, nullable=True)
     dllm_tokens = Column(Integer, default=0)
     referral_link = Column(String, nullable=True)
+    wallet_address = Column(String(66), nullable=True, unique=True)  # Added for Aptos wallet support
 
 class Device(Base):
     __tablename__ = "devices"

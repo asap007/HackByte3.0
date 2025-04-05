@@ -349,13 +349,32 @@ def device_registration(request: DeviceRegistrationRequest, db: Session = Depend
 # User Registration Endpoint
 @app.post("/register", response_model=schemas.UserOut)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    # ... (existing code)
+    # Existing validation
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    # Wallet address validation if provided
+    if user.wallet_address:
+        if not re.match(r'^0x[0-9a-fA-F]{64}$', user.wallet_address):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Aptos wallet address format"
+            )
+        
+        if db.query(models.User).filter(models.User.wallet_address == user.wallet_address).first():
+            raise HTTPException(
+                status_code=400,
+                detail="Wallet address already in use"
+            )
+
     hashed_password = auth.get_password_hash(user.password)
-    new_user = models.User(email=user.email, name=user.name, hashed_password=hashed_password)
+    new_user = models.User(
+        email=user.email,
+        name=user.name,
+        hashed_password=hashed_password,
+        wallet_address=user.wallet_address if user.wallet_address else None
+    )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -480,14 +499,14 @@ def get_public_stats():
 
 @app.get("/user", response_model=schemas.UserDashboard)
 def get_user_info(token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)):
-    # ... (existing code)
     current_user = auth.get_current_user(token, db)
-    # Make sure your user model actually has these fields or adjust schema
     return schemas.UserDashboard(
         email=current_user.email,
-        profile_picture=current_user.profile_picture, # Uncomment if exists
-        dllm_tokens=current_user.dllm_tokens,         # Uncomment if exists
-        referral_link=current_user.referral_link      # Uncomment if exists
+        name=current_user.name,
+        profile_picture=current_user.profile_picture,
+        dllm_tokens=current_user.dllm_tokens,
+        referral_link=current_user.referral_link,
+        wallet_address=current_user.wallet_address  # Added this line
     )
 
 
@@ -514,8 +533,11 @@ def get_user_leaderboard():
     # users = db.query(models.User).order_by(models.User.dllm_tokens.desc()).limit(10).all()
     # return [{"username": u.name or u.email, "profile_picture": u.profile_picture, "score": u.dllm_tokens} for u in users]
     return [
-        {"username": "[NEW] John Doe", "profile_picture": None, "score": 90},
+        {"username": "John Doe", "profile_picture": None, "score": 90},
         {"username": "Jane Smith", "profile_picture": None, "score": 50},
+        {"username": "Rohabn", "profile_picture": None, "score": 80},
+        {"username": "Jake", "profile_picture": None, "score": 70},
+        {"username": "Dan", "profile_picture": None, "score": 78},
         # ... other dummy data
     ]
 
@@ -523,8 +545,12 @@ def get_user_leaderboard():
 def get_agent_leaderboard():
      # ... (existing code - replace with actual data if available)
     return [
-        {"agent_name": "[NEW] GPT-4 Turbo", "agent_link": "#", "score": 98},
+        {"agent_name": "GPT-2 Turbo", "agent_link": "#", "score": 98},
         {"agent_name": "Claude 2", "agent_link": "#", "score": 95},
+        {"agent_name": "Tinyllama:1b", "agent_link": "#", "score": 98},
+        {"agent_name": "Llama:3b", "agent_link": "#", "score": 98},
+        {"agent_name": "Tinyllama:1.1b", "agent_link": "#", "score": 98},
+        
         # ... other dummy data
     ]
 
@@ -533,6 +559,71 @@ def get_agent_leaderboard():
 def signup():
     # ... (existing code)
     return RedirectResponse(url="#")
+
+@app.patch("/user/wallet", response_model=schemas.WalletResponse)
+def update_wallet_address(
+    wallet_update: schemas.WalletUpdate,
+    token: str = Depends(auth.oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Update the user's Aptos wallet address
+    - Validates Aptos address format (0x + 64 hex chars)
+    - Ensures address is unique across users
+    """
+    # Authenticate user
+    current_user = auth.get_current_user(token, db)
+    
+    # Validate Aptos address format
+    if not re.match(r'^0x[0-9a-fA-F]{64}$', wallet_update.wallet_address):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Aptos address format. Must be 0x followed by 64 hex characters."
+        )
+    
+    # Check if address is already in use by another user
+    existing_user = db.query(models.User).filter(
+        models.User.wallet_address == wallet_update.wallet_address,
+        models.User.id != current_user.id
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This wallet address is already associated with another account."
+        )
+    
+    # Update the wallet address
+    current_user.wallet_address = wallet_update.wallet_address
+    db.commit()
+    db.refresh(current_user)
+    
+    return {
+        "message": "Wallet address updated successfully",
+        "wallet_address": current_user.wallet_address
+    }
+
+@app.get("/wallet/check-availability/{wallet_address}")
+def check_wallet_availability(
+    wallet_address: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a wallet address is available (not already registered)
+    - Returns 400 for invalid format
+    - Returns 200 with availability status
+    """
+    if not re.match(r'^0x[0-9a-fA-F]{64}$', wallet_address):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Aptos address format. Must be 0x followed by 64 hex characters."
+        )
+    
+    exists = db.query(models.User).filter(
+        models.User.wallet_address == wallet_address
+    ).first() is not None
+    
+    return {"available": not exists}
 
 # GET endpoint for survey redirection
 @app.get("/survey")
