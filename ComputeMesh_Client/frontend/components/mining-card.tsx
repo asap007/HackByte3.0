@@ -57,7 +57,7 @@ export function MiningCard() {
         return;
       }
 
-      const response = await fetch('http://localhost:8000/user/points', {
+      const response = await fetch('https://acehack4-0-backend.onrender.com/user/points', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -201,7 +201,7 @@ export function MiningCard() {
       return;
     }
 
-    const wsUrl = `ws://localhost:8000/ws?token=${encodeURIComponent(token)}`;
+    const wsUrl = `wss://acehack4-0-backend.onrender.com/ws?token=${encodeURIComponent(token)}`;
     addLog(`Connecting to WebSocket at ${wsUrl}`);
     
     try {
@@ -312,7 +312,7 @@ export function MiningCard() {
                      focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-opacity-50"
           onClick={(e) => {
             e.preventDefault();
-            openInBrowser('http://localhost:8000/survey');
+            openInBrowser('https://acehack4-0-backend.onrender.com/survey');
           }}
         >
           Complete the Survey (+1200 Aptos)

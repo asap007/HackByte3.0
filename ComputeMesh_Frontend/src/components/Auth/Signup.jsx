@@ -29,7 +29,7 @@ function Signup() {
     setError("")
 
     try {
-      const response = await fetch("http://localhost:8000/register", {
+      const response = await fetch("https://acehack4-0-backend.onrender.com/register", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -47,7 +47,7 @@ function Signup() {
       }
 
       // After successful registration, automatically log in
-      const loginResponse = await fetch("http://localhost:8000/token", {
+      const loginResponse = await fetch("https://acehack4-0-backend.onrender.com/token", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",

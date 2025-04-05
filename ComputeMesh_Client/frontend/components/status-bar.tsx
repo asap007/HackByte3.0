@@ -15,7 +15,7 @@ export function StatusBar() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch('http://localhost:8000/public-stats');
+        const response = await fetch('https://acehack4-0-backend.onrender.com/public-stats');
         const data = await response.json();
         setStats(data);
       } catch (error) {

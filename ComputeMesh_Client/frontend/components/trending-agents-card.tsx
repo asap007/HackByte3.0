@@ -26,7 +26,7 @@ export function TrendingAgentsCard() {
   const fetchAgents = async () => {
     try {
       setError(null);
-      const response = await fetch("http://localhost:8000/leaderboard/agents");
+      const response = await fetch("https://acehack4-0-backend.onrender.com/leaderboard/agents");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -117,7 +117,7 @@ export function TrendingAgentsCard() {
           className="w-full bg-purple-500 hover:bg-purple-600 text-white"
           onClick={(e) => {
             e.preventDefault();
-            openInBrowser('http://localhost:8000/leaderboard/agents/all');
+            openInBrowser('https://acehack4-0-backend.onrender.com/leaderboard/agents/all');
           }}
           disabled={loading || !!error}
         >
