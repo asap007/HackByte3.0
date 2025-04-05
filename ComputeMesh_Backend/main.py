@@ -97,35 +97,44 @@ async def send_command_to_client(user_id: int, command: schemas.CommandRequest, 
     try:
         future = await manager.send_command(user_id, command)
         result_str = await asyncio.wait_for(future, timeout=timeout)
-        logger.info(f"Received response via WebSocket from user {user_id} for command {command.url}: {result_str}")
+        logger.info(f"Received response via WebSocket from user {user_id} for command {command.url}")
+        
+        # Handle case where result is already a dict (from modified receive_response)
+        if isinstance(result_str, dict):
+            return result_str
+            
         try:
-            # Assume client sends back JSON string representation of Cortex response
-            result_data = json.loads(result_str)
-            # Check for potential error structure from client/Cortex
-            if isinstance(result_data, dict) and result_data.get("error"):
-                 logger.error(f"Client {user_id} reported error for command {command.url}: {result_data}")
-                 # Re-raise as HTTPException or return error structure
-                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error from client node: {result_data.get('error')}")
-            return result_data
+            # Try to parse the response as JSON
+            if result_str:  # Only parse if there's content
+                result_data = json.loads(result_str)
+                # Check for potential error structure from client/Cortex
+                if isinstance(result_data, dict) and result_data.get("error"):
+                    logger.error(f"Client {user_id} reported error for command {command.url}: {result_data}")
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, 
+                                      detail=f"Error from client node: {result_data.get('error')}")
+                return result_data
+            return {}
         except json.JSONDecodeError:
-            logger.warning(f"Response from user {user_id} for command {command.url} was not valid JSON: {result_str}")
-            # Depending on expected behavior, might return raw string or raise error
-            return {"raw_response": result_str} # Or raise HTTPException
+            logger.info(f"Response from user {user_id} for command {command.url} was not JSON: {result_str}")
+            return {"raw_response": result_str}
         except HTTPException as e:
-            raise e # Propagate errors reported by client
+            raise e
         except Exception as e:
             logger.error(f"Error processing response from user {user_id} for command {command.url}: {e}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error processing client response: {e}")
-
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                              detail=f"Error processing client response: {e}")
     except ConnectionError as e:
         logger.error(f"Failed to send command to user {user_id} (Not connected?): {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Client {user_id} not connected or command failed: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
+                          detail=f"Client {user_id} not connected or command failed: {e}")
     except asyncio.TimeoutError:
         logger.error(f"Timeout waiting for response from user {user_id} for command {command.url}.")
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=f"Timeout waiting for response from client {user_id}.")
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, 
+                          detail=f"Timeout waiting for response from client {user_id}.")
     except Exception as e:
         logger.error(f"Unexpected error sending command via manager to user {user_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error sending command: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                          detail=f"Server error sending command: {e}")
 
 
 def extract_model_id_from_url(model_url: str) -> str:
