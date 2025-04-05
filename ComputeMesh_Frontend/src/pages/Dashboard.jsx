@@ -650,6 +650,41 @@ function Dashboard() {
                       </button>
                     ))}
                     {/* Rest of the dropdown content remains unchanged */}
+                    <div className={`border-t ${darkMode ? "border-[#222222]" : "border-gray-200"} my-2`}></div>
+                    <div className="px-4 py-3">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className={`text-sm ${darkMode ? "text-gray-300" : "text-gray-700"}`}>
+                          Custom Hugging Face Model
+                        </span>
+                        <button
+                          className="text-xs text-[#7814E3] hover:text-[#7814e3e8] flex items-center"
+                          onClick={navigateToHuggingFace}
+                        >
+                          Browse Models
+                          <ExternalLink className="w-3 h-3 ml-1" />
+                        </button>
+                      </div>
+
+                      <form onSubmit={handleCustomUrlSubmit} className="flex items-center space-x-2">
+                        <input
+                          type="text"
+                          value={customModelUrl}
+                          onChange={(e) => setCustomModelUrl(e.target.value)}
+                          placeholder="Enter Hugging Face model URL"
+                          className={`flex-1 text-sm p-2 rounded-md ${darkMode
+                            ? "bg-[#2A2A2A] border-[#333333] text-white placeholder-gray-400"
+                            : "bg-[#e9eaec] border-gray-200 text-gray-900 placeholder-gray-500"
+                            } border focus:outline-none focus:ring-1 focus:ring-[#7814E3]`}
+                        />
+                        <button
+                          type="submit"
+                          className="bg-[#7814E3] hover:bg-[#7814e3f1] text-white font-medium text-xs py-2 px-3 rounded-md shadow-sm transition-colors"
+                          disabled={isModelLoading}
+                        >
+                          {isModelLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Use"}
+                        </button>
+                      </form>
+                    </div>
                   </div>
                 </div>
               )}
