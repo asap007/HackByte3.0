@@ -1,29 +1,31 @@
-# main.py - Rewritten for Command Relay
-
-from fastapi import (
-    FastAPI, Depends, HTTPException, status, WebSocket, 
-    WebSocketDisconnect, Request, Query
-)
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from pydantic import BaseModel # Keep for existing schemas
-from prometheus_fastapi_instrumentator import Instrumentator
+import models, schemas, auth
+from database import engine, SessionLocal, redis_client
+from command_dispatcher import manager
 from datetime import timedelta, datetime
-from typing import List, Dict, Any, Optional
 import logging
 import asyncio
+from typing import List, Dict, Any, Optional
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
+from prometheus_fastapi_instrumentator import Instrumentator
+import httpx
 import json
 import os
 import re
+from urllib.parse import urlparse
 
-# Local imports (assuming they are in the same directory or accessible)
-import models
-import schemas # Keep for existing schemas and potentially CommandRequest if defined there
-import auth
-from database import engine, SessionLocal, redis_client # Assuming redis_client is still needed elsewhere
-from command_dispatcher import manager # CRITICAL: Use the manager for relaying
+# --- Cortex Configuration ---
+CORTEX_API_BASE_URL = os.getenv("CORTEX_API_URL", "http://127.0.0.1:39281")
+CORTEX_ENGINE_NAME = os.getenv("CORTEX_ENGINE_NAME", "llama-cpp")
+
+# --- State Variables ---
+cortex_engine_loaded = False
+currently_loaded_model_id: Optional[str] = None
+model_pull_tasks: Dict[str, Dict[str, Any]] = {}  # Track ongoing model downloads
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +42,7 @@ Instrumentator().instrument(app).expose(app)
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Be more specific in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,18 +56,13 @@ def get_db():
     finally:
         db.close()
 
-# --- Schemas (Keep relevant ones used by endpoints) ---
-# Schemas needed for Auth, User management, Points, etc. are kept.
-# Schemas specific to direct Cortex interaction might be simplified if 
-# the backend no longer needs to parse their specifics deeply.
-
+# --- Schemas ---
 class DeviceRegistrationRequest(BaseModel):
     device_id: str
 
-# Reuse schemas defined in schemas.py if they exist
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: List[schemas.ChatMessage] # Assuming schemas.ChatMessage exists
+    messages: List[schemas.ChatMessage]
     stream: bool = False
     max_tokens: int = 512
     temperature: float = 0.6
@@ -75,127 +72,271 @@ class ChatCompletionRequest(BaseModel):
 
 class ModelPullRequest(BaseModel):
     model: str  # Can be model ID or HuggingFace URL
-    # name: Optional[str] = None # Keep if needed by client, otherwise remove
+    name: Optional[str] = None  # Optional custom name
 
+class ModelStatusResponse(BaseModel):
+    loaded: Optional[str]
+    engine_loaded: bool
+    available_models: List[Dict[str, Any]]
+    download_tasks: Dict[str, Dict[str, Any]]
 
-# --- Helper Function for Command Relay ---
-async def relay_command_to_client(
-    user_id: int,
+# --- Helper Functions ---
+async def call_cortex_api(
     method: str,
-    url: str,
-    data: Optional[Dict[str, Any]] = None,
-    timeout: int = 30 # Seconds to wait for client response
-) -> Any:
-    """Sends a command to a connected client via WebSocket and awaits the response."""
-    if user_id not in manager.active_connections:
-        logger.warning(f"Attempted to relay command to disconnected user {user_id}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} is not connected.")
+    endpoint: str,
+    payload: Optional[Dict[str, Any]] = None,
+    expected_status: int = 200
+) -> Dict[str, Any]:
+    """Helper function to make calls to the Cortex API."""
+    url = f"{CORTEX_API_BASE_URL}{endpoint}"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            logger.info(f"Calling Cortex API: {method} {url} Payload: {payload}")
+            if method.upper() == "POST":
+                response = await client.post(url, json=payload)
+            elif method.upper() == "GET":
+                response = await client.get(url)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-    # Ensure schemas.CommandRequest is correctly defined or create one ad-hoc
-    # Assuming schemas.py has:
-    # class CommandRequest(BaseModel):
-    #     method: str
-    #     url: str
-    #     data: Optional[Dict[str, Any]] = None
-    # If not, adjust the payload creation accordingly.
-    command_request_payload = {
-        "method": method,
-        "url": url,
-        "data": data
-    }
-    # If schemas.CommandRequest exists and is used by manager:
-    command_request_obj = schemas.CommandRequest(**command_request_payload)
+            logger.info(f"Cortex API Response Status: {response.status_code}")
+            
+            if not response.text:
+                if response.status_code == expected_status:
+                    logger.info(f"Cortex API returned empty response with status {response.status_code}")
+                    return {"message": "Operation successful (empty response)"}
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Cortex API returned an empty error response."
+                )
 
+            try:
+                response_data = response.json()
+                if response.status_code != expected_status:
+                    logger.error(f"Cortex API Error ({response.status_code}): {response_data}")
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Error from Cortex API: {response_data}"
+                    )
+                return response_data
+            except json.JSONDecodeError:
+                logger.error(f"Cortex API Error: Failed to decode JSON response")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Cortex API returned non-JSON response"
+                )
 
+        except httpx.RequestError as e:
+            logger.error(f"Error connecting to Cortex API at {url}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Could not connect to Cortex API: {e}"
+            )
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during Cortex API call: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"An internal error occurred: {e}"
+            )
+
+async def get_available_models() -> List[Dict[str, Any]]:
+    """Get list of available models from Cortex"""
     try:
-        logger.info(f"Relaying command to user {user_id}: {method} {url} Data: {data}")
-        # Send command via WebSocket manager and get the Future
-        # Use command_request_obj if manager expects the Pydantic model
-        future = await manager.send_command(user_id, command_request_obj) 
-
-        # Wait for the client's response via the Future
-        result = await asyncio.wait_for(future, timeout=timeout)
-
-        logger.info(f"Received response from user {user_id} for {method} {url}: {result}")
-        # The 'result' here is whatever the client sent back in its response payload
-        return result
-
-    except ConnectionError as e:
-        # This exception might be raised by manager if connection drops *during* send
-        logger.error(f"Connection error relaying command to user {user_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to send command to client: {e}")
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout waiting for response from user {user_id} for {method} {url}.")
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Timeout waiting for response from client.")
+        response = await call_cortex_api("GET", "/v1/models")
+        return response.get("data", [])
     except Exception as e:
-        logger.exception(f"Unexpected error relaying command to user {user_id} for {method} {url}") # Use logger.exception for stack trace
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during command relay.")
+        logger.error(f"Error getting available models: {e}")
+        return []
 
+def extract_model_id_from_url(model_url: str) -> str:
+    """Extract a standardized model ID from a HuggingFace URL"""
+    try:
+        parsed = urlparse(model_url)
+        if not parsed.netloc.endswith("huggingface.co"):
+            raise ValueError("URL must be from huggingface.co domain")
+        
+        path_parts = parsed.path.strip("/").split("/")
+        if len(path_parts) < 3:
+            raise ValueError("Invalid HuggingFace model URL format")
+        
+        # Extract org/repo/filename
+        org = path_parts[0]
+        repo = path_parts[1]
+        filename = path_parts[-1]
+        
+        # Create standardized ID format: org:repo:filename
+        return f"{org}:{repo}:{filename}"
+    except Exception as e:
+        logger.error(f"Error parsing model URL: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid model URL format: {str(e)}"
+        )
+
+async def pull_model(model_identifier: str) -> Dict[str, Any]:
+    """Pull a model from HuggingFace"""
+    try:
+        # Determine if it's a URL or ID
+        if model_identifier.startswith("http"):
+            model_id = extract_model_id_from_url(model_identifier)
+        else:
+            model_id = model_identifier
+        
+        # Start the download
+        response = await call_cortex_api(
+            "POST",
+            "/v1/models/pull",
+            {"model": model_id}
+        )
+        
+        # Track the download task
+        task_id = response.get("task", {}).get("id", model_id)
+        model_pull_tasks[task_id] = {
+            "status": "downloading",
+            "model_id": model_id,
+            "start_time": datetime.utcnow(),
+            "response": response
+        }
+        
+        return response
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error pulling model: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to pull model: {str(e)}"
+        )
+
+async def ensure_model_loaded(target_model_id: str) -> bool:
+    """Ensure the specified model is loaded, switching if needed"""
+    global currently_loaded_model_id, cortex_engine_loaded
+    
+    # 1. Load Engine (if not already done)
+    if not cortex_engine_loaded:
+        logger.info(f"Cortex engine '{CORTEX_ENGINE_NAME}' not loaded yet. Attempting to load.")
+        try:
+            await call_cortex_api(
+                "POST", 
+                f"/v1/engines/{CORTEX_ENGINE_NAME}/load"
+            )
+            cortex_engine_loaded = True
+            logger.info(f"Cortex engine '{CORTEX_ENGINE_NAME}' loaded successfully.")
+        except HTTPException as e:
+            logger.error(f"Failed to load Cortex engine: {e.detail}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to load the backend inference engine."
+            )
+
+    # 2. Check if model needs to be changed
+    if currently_loaded_model_id == target_model_id:
+        logger.info(f"Model '{target_model_id}' is already loaded.")
+        return True
+    
+    # 3. Stop currently loaded model if any
+    if currently_loaded_model_id:
+        try:
+            await call_cortex_api(
+                "POST", 
+                "/v1/models/stop",
+                {"model": currently_loaded_model_id}
+            )
+            logger.info(f"Stopped previous model: {currently_loaded_model_id}")
+        except HTTPException as e:
+            logger.warning(f"Error stopping previous model: {e.detail}")
+            # Continue anyway - might already be stopped
+    
+    # 4. Start new model
+    try:
+        await call_cortex_api(
+            "POST",
+            "/v1/models/start",
+            {"model": target_model_id}
+        )
+        currently_loaded_model_id = target_model_id
+        logger.info(f"Successfully switched to model: {target_model_id}")
+        return True
+    except HTTPException as e:
+        currently_loaded_model_id = None
+        logger.error(f"Failed to start model '{target_model_id}': {e.detail}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to start the requested model '{target_model_id}': {e.detail}"
+        )
 
 # --- API Endpoints ---
-
-# --- Cortex Related Endpoints (Rewritten to Relay Commands) ---
-
 @app.post("/v1/models/pull")
-async def pull_model_endpoint(request: ModelPullRequest, db: Session = Depends(get_db), token: str = Depends(auth.oauth2_scheme)):
-    """(Relayed) Pull a model via the connected client."""
-    current_user = auth.get_current_user(token, db)
-    response = await relay_command_to_client(
-        user_id=current_user.id,
-        method="POST",
-        url="/v1/models/pull",
-        data={"model": request.model} # Pass necessary data from request
-    )
-    # Return the exact response received from the client
-    return JSONResponse(content=response)
+async def pull_model_endpoint(request: ModelPullRequest, token: str = Depends(auth.oauth2_scheme)):
+    """Pull a model from HuggingFace"""
+    auth.get_current_user(token, SessionLocal())  # Verify auth
+    
+    try:
+        response = await pull_model(request.model)
+        return JSONResponse(content=response)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in model pull")
+        raise HTTPException(500, "Internal server error")
 
 @app.post("/v1/chat/completions")
-async def chat_completion_endpoint(request: ChatCompletionRequest, db: Session = Depends(get_db), token: str = Depends(auth.oauth2_scheme)):
-    """(Relayed) Handle chat completion via the connected client."""
-    current_user = auth.get_current_user(token, db)
-    # Forward the entire request payload as data to the client
-    response = await relay_command_to_client(
-        user_id=current_user.id,
-        method="POST",
-        url="/v1/chat/completions",
-        data=request.dict() # Pass the full request details
-    )
-    # Return the exact response received from the client
-    return JSONResponse(content=response)
+async def chat_completion(request: ChatCompletionRequest, token: str = Depends(auth.oauth2_scheme)):
+    """Handle chat completion with model switching"""
+    auth.get_current_user(token, SessionLocal())
+    
+    try:
+        # Ensure the requested model is loaded
+        await ensure_model_loaded(request.model)
+        
+        # Forward to Cortex
+        cortex_response = await call_cortex_api(
+            "POST",
+            "/v1/chat/completions",
+            request.dict()
+        )
+        return JSONResponse(content=cortex_response)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("Unexpected error in chat completion")
+        raise HTTPException(500, "Internal server error")
 
 @app.get("/v1/models")
-async def list_models_endpoint(db: Session = Depends(get_db), token: str = Depends(auth.oauth2_scheme)):
-    """(Relayed) Get available models from the connected client."""
-    current_user = auth.get_current_user(token, db)
-    response = await relay_command_to_client(
-        user_id=current_user.id,
-        method="GET",
-        url="/v1/models",
-        data=None
-    )
-    # The response directly from the client's Cortex /v1/models call
-    # Backend no longer manages 'loaded', 'engine_loaded', 'download_tasks' state directly
-    return JSONResponse(content=response)
+async def list_models(token: str = Depends(auth.oauth2_scheme)):
+    """Get available models and their status"""
+    auth.get_current_user(token, SessionLocal())
+    
+    try:
+        models = await get_available_models()
+        return {
+            "data": models,
+            "loaded": currently_loaded_model_id,
+            "engine_loaded": cortex_engine_loaded,
+            "download_tasks": model_pull_tasks
+        }
+    except Exception as e:
+        logger.exception("Error getting model list")
+        raise HTTPException(500, "Could not retrieve models")
 
 @app.get("/v1/models/status")
-async def model_status_endpoint(db: Session = Depends(get_db), token: str = Depends(auth.oauth2_scheme)):
-    """(Relayed) Check current model status on the connected client."""
-    current_user = auth.get_current_user(token, db)
-    response = await relay_command_to_client(
-        user_id=current_user.id,
-        method="GET",
-        url="/v1/models/status",
-        data=None
+async def model_status(token: str = Depends(auth.oauth2_scheme)):
+    """Check current model status"""
+    auth.get_current_user(token, SessionLocal())
+    return ModelStatusResponse(
+        loaded=currently_loaded_model_id,
+        engine_loaded=cortex_engine_loaded,
+        available_models=await get_available_models(),
+        download_tasks=model_pull_tasks
     )
-    # The response directly from the client's Cortex /v1/models/status call
-    return JSONResponse(content=response)
 
 
-# --- Existing Endpoints (Largely Unchanged) ---
+# --- Existing Endpoints (Keep them as they are) ---
 
 # Device Registration Endpoint
 @app.post("/device-registration")
 def device_registration(request: DeviceRegistrationRequest, db: Session = Depends(get_db)):
+    # ... (existing code)
     device = db.query(models.Device).filter(models.Device.device_id == request.device_id).first()
     if device:
         return {"status": "already recorded"}
@@ -206,14 +347,15 @@ def device_registration(request: DeviceRegistrationRequest, db: Session = Depend
 
 
 # User Registration Endpoint
-@app.post("/register", response_model=schemas.UserOut) # Assuming schemas.UserOut exists
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)): # Assuming schemas.UserCreate exists
+@app.post("/register", response_model=schemas.UserOut)
+def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # Existing validation
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Wallet address validation if provided (keep if needed)
-    if hasattr(user, 'wallet_address') and user.wallet_address:
+    # Wallet address validation if provided
+    if user.wallet_address:
         if not re.match(r'^0x[0-9a-fA-F]{64}$', user.wallet_address):
             raise HTTPException(
                 status_code=400,
@@ -227,23 +369,21 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)): # Assumin
             )
 
     hashed_password = auth.get_password_hash(user.password)
-    new_user_data = {
-        "email": user.email,
-        "hashed_password": hashed_password,
-    }
-    # Add optional fields if they exist in the model and schema
-    if hasattr(user, 'name'): new_user_data['name'] = user.name
-    if hasattr(user, 'wallet_address'): new_user_data['wallet_address'] = user.wallet_address
-
-    new_user = models.User(**new_user_data)
+    new_user = models.User(
+        email=user.email,
+        name=user.name,
+        hashed_password=hashed_password,
+        wallet_address=user.wallet_address if user.wallet_address else None
+    )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return new_user
 
 # Token Endpoint
-@app.post("/token", response_model=schemas.Token) # Assuming schemas.Token exists
+@app.post("/token", response_model=schemas.Token)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # ... (existing code)
     user = auth.authenticate_user(db, form_data.username, form_data.password)
     if not user:
         logger.warning(f"Failed login attempt for user: {form_data.username}")
@@ -262,7 +402,8 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
 
 # WebSocket Endpoint
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)): # Get token from query param
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    # ... (existing code - assuming this talks to nodes directly, not Cortex)
     try:
         payload = auth.jwt.decode(token, auth.SECRET_KEY, algorithms=[auth.ALGORITHM])
         username: str = payload.get("sub")
@@ -270,240 +411,233 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)): # G
             logger.warning("WebSocket connection attempted without username in token.")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-        # Use context manager for session safety in async
-        with SessionLocal() as db:
-            user = auth.get_user(db, email=username)
-            if user is None:
-                logger.warning(f"WebSocket connection attempted with invalid user: {username}")
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-            user_id = user.id # Get user_id before session closes
-    
+        db = SessionLocal() # Create new session for async context
+        user = auth.get_user(db, email=username)
+        db.close() # Close session after use
+        if user is None:
+            logger.warning(f"WebSocket connection attempted with invalid user: {username}")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
     except (auth.JWTError, Exception) as e:
         logger.error(f"WebSocket authentication failed: {e}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # Proceed with connection if user is valid
-    await manager.connect(websocket, user_id)
-    logger.info(f"WebSocket connection established for user: {username} (ID: {user_id})")
+    await manager.connect(websocket, user.id)
+    logger.info(f"WebSocket connection established for user: {username}")
     try:
         while True:
             data = await websocket.receive_text()
-            logger.debug(f"Received raw message from user {user_id}: {data}") # Use debug level
-            # This is where the client sends RESPONSES back
-            await manager.receive_response(data)
-    except WebSocketDisconnect as e:
-        logger.info(f"WebSocket connection closed for user {user_id}. Code: {e.code}, Reason: {e.reason}")
+            logger.info(f"Received message from user {username}: {data}")
+            await manager.receive_response(data) # Assumes manager handles node responses
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket connection closed for user: {username}")
     except Exception as e:
-        logger.error(f"WebSocket error for user {user_id}: {e}", exc_info=True) # Log stack trace
+        logger.error(f"WebSocket error for user {username}: {e}")
     finally:
         # Ensure disconnect is called even if errors occur within the loop
-        await manager.disconnect(user_id)
-        logger.info(f"Cleaned up connection for user {user_id}")
+        await manager.disconnect(user.id)
 
 
-# --- Admin/Debug Command Endpoints (Keep or Remove based on need) ---
-# These endpoints might be useful for admins to send commands, but ensure
-# they have proper authorization checks if kept. They already use the manager.
-
-@app.post("/send-command/{target_user_id}")
-async def send_command_endpoint(
-    target_user_id: int,
-    command_request: schemas.CommandRequest, # Assuming schemas.CommandRequest exists
-    db: Session = Depends(get_db),
-    token: str = Depends(auth.oauth2_scheme) # Add auth for this endpoint
-):
-    # Add authorization check: Is the current user an admin?
-    current_user = auth.get_current_user(token, db)
-    # Example: if not current_user.is_admin: raise HTTPException(403, "Not authorized")
-    logger.info(f"Admin user {current_user.email} attempting to send command to user {target_user_id}")
-
-    # Use the relay helper function for consistency
-    response = await relay_command_to_client(
-        user_id=target_user_id,
-        method=command_request.method,
-        url=command_request.url,
-        data=command_request.data
-    )
-    return {"message": f"Command sent to user {target_user_id}", "response": response}
-
-
-@app.post("/broadcast-command")
-async def broadcast_command_endpoint(
-    command_request: schemas.CommandRequest, # Assuming schemas.CommandRequest exists
-    db: Session = Depends(get_db),
-    token: str = Depends(auth.oauth2_scheme) # Add auth for this endpoint
-):
-     # Add authorization check: Is the current user an admin?
-    current_user = auth.get_current_user(token, db)
-    # Example: if not current_user.is_admin: raise HTTPException(403, "Not authorized")
-    logger.info(f"Admin user {current_user.email} attempting to broadcast command")
-
-    # Broadcasting might need different handling in the manager if it doesn't return futures per user
-    # The original manager.broadcast_command seemed to try and collect results, which might be complex.
-    # Consider if broadcast needs responses or is fire-and-forget.
-    # For simplicity, let's assume the manager handles sending without waiting for individual responses here.
-    # If you NEED aggregated results, the manager logic would need adjustment.
-
-    # Simplified broadcast (adjust if your manager returns differently)
-    connected_users = list(manager.active_connections.keys())
-    if not connected_users:
-        return {"message": "No users connected to broadcast to."}
-
-    logger.info(f"Broadcasting command to users: {connected_users}")
-    # This part depends heavily on how manager.broadcast_command is implemented.
-    # If it just sends, we don't await futures here.
-    # If it tries to collect results like the old code, it might need async gathering.
-    # Let's assume fire-and-forget for now based on likely use cases.
-    broadcast_payload = {
-        "command_id": f"broadcast-{uuid.uuid4()}", # Generate a broadcast ID
-        "method": command_request.method,
-        "url": command_request.url,
-        "data": command_request.data
-    }
-    tasks = []
-    for user_id, websocket in manager.active_connections.items():
+# Command Dispatch Endpoint (If this is meant for your nodes, keep it)
+@app.post("/send-command/{user_id}")
+async def send_command(user_id: int, command_request: schemas.CommandRequest, db: Session = Depends(get_db)):
+    # ... (existing code - assuming this talks to nodes directly, not Cortex)
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Assuming CommandRequest has 'method', 'url', 'data' like before
+    # command = command_request.url
+    try:
+        future = await manager.send_command(user_id, command_request) # Send to specific node via manager
+        result = await asyncio.wait_for(future, timeout=30) # Wait for node response
+        logger.info(f"Received response for command to user '{user.email}': {result}")
+        # Process result as needed, maybe parse if it's JSON string
         try:
-            # Directly send without waiting for individual responses via manager's future mechanism
-            # manager.send_command internally creates futures we don't need here
-            await websocket.send_text(json.dumps(broadcast_payload))
-            logger.debug(f"Sent broadcast payload to user {user_id}")
-        except Exception as e:
-            logger.error(f"Failed to send broadcast to user {user_id}: {e}")
+            response_data = json.loads(result)
+        except json.JSONDecodeError:
+            response_data = result # Keep as string if not JSON
+        return {"message": f"Command sent to user '{user.email}'", "response": response_data}
+    except ConnectionError as e:
+        logger.error(f"Failed to send command to user '{user.email}': {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout waiting for response for command for user '{user.email}'.")
+        raise HTTPException(status_code=504, detail="Timeout waiting for command response.")
+    except Exception as e:
+        logger.error(f"Error sending command via manager: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": f"Broadcast command initiated to {len(connected_users)} connected users."}
 
+# Example Broadcast Command Endpoint (If this is meant for your nodes, keep it)
+@app.post("/broadcast-command")
+async def broadcast_command(command_request: schemas.CommandRequest):
+    # ... (existing code - assuming this talks to nodes directly, not Cortex)
+    # command = command_request.command # Assuming structure
+    # data = command_request.data
+    try:
+        # Assuming manager.broadcast_command takes the whole request or parts
+        results = await manager.broadcast_command(command_request)
+        return {"message": f"Command broadcasted to all connected users.", "results": results}
+    except Exception as e:
+        logger.error(f"Error broadcasting command: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# --- Other existing endpoints (Mostly Unchanged) ---
-@app.get("/public-stats", response_model=schemas.PublicStats) # Assuming schemas.PublicStats exists
+# --- Other existing endpoints ---
+@app.get("/public-stats", response_model=schemas.PublicStats)
 def get_public_stats():
-    active_node_count = len(manager.active_connections) # Get live count
+    # ... (existing code)
     return schemas.PublicStats(
-        active_nodes=active_node_count,
-        dllm_price={"yesterday": 0.073, "current": 0.1}, # Keep as static or fetch elsewhere
-        btc_price={"yesterday": 93825.89, "current": 100000.00}, # Keep as static or fetch elsewhere
+        active_nodes=2000, # Maybe update this based on manager.get_active_connections_count() if manager has it
+        dllm_price={"yesterday": 0.073, "current": 0.1},
+        btc_price={"yesterday": 93825.89, "current": 100000.00},
         twitter_link="https://x.com/AnshulSingh5180",
         discord_link="https://x.com/AnshulSingh5180",
-        online_discord_users=500, # Static or fetch elsewhere
-        twitter_followers=3000 # Static or fetch elsewhere
+        online_discord_users=500,
+        twitter_followers=3000
     )
 
-@app.get("/user", response_model=schemas.UserDashboard) # Assuming schemas.UserDashboard exists
+@app.get("/user", response_model=schemas.UserDashboard)
 def get_user_info(token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)):
     current_user = auth.get_current_user(token, db)
-    # Ensure the schema fields match the user model attributes
-    dashboard_data = {"email": current_user.email}
-    if hasattr(current_user, 'name'): dashboard_data['name'] = current_user.name
-    if hasattr(current_user, 'profile_picture'): dashboard_data['profile_picture'] = current_user.profile_picture
-    if hasattr(current_user, 'dllm_tokens'): dashboard_data['dllm_tokens'] = current_user.dllm_tokens
-    if hasattr(current_user, 'referral_link'): dashboard_data['referral_link'] = current_user.referral_link
-    if hasattr(current_user, 'wallet_address'): dashboard_data['wallet_address'] = current_user.wallet_address
-    
-    return schemas.UserDashboard(**dashboard_data)
+    return schemas.UserDashboard(
+        email=current_user.email,
+        name=current_user.name,
+        profile_picture=current_user.profile_picture,
+        dllm_tokens=current_user.dllm_tokens,
+        referral_link=current_user.referral_link,
+        wallet_address=current_user.wallet_address  # Added this line
+    )
 
 
 @app.post("/user/points")
-def add_points(points_update: schemas.PointsUpdate, token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)): # Assuming schemas.PointsUpdate exists
+# Change 'points_update: schemas.PointsUpdate' to 'points_request: schemas.PointsRequest'
+# (or just 'points_request: PointsRequest' if defined directly in main.py)
+def add_points(points_request: schemas.PointsRequest, token: str = Depends(auth.oauth2_scheme), db: Session = Depends(get_db)): 
     current_user = auth.get_current_user(token, db)
+    
+    # Access points via points_request.points
+    points_to_add = points_request.points 
+    
     if hasattr(current_user, 'dllm_tokens') and current_user.dllm_tokens is not None:
-         current_user.dllm_tokens += points_update.points # Use points from schema
+         # Use the points_to_add variable
+         current_user.dllm_tokens += points_to_add 
     else:
-         # Initialize if missing? Or return error?
-         # current_user.dllm_tokens = points_update.points # Initialize
          logger.warning(f"User {current_user.email} does not have 'dllm_tokens' attribute or it is None. Points not added.")
-         # Return an error instead?
-         # raise HTTPException(status_code=400, detail="User points tracking not enabled.")
          return {"detail": "User does not have points tracking enabled or is null.", "total_points": None}
 
     db.commit()
     db.refresh(current_user)
-    return {"detail": f"{points_update.points} points added.", "total_points": current_user.dllm_tokens}
+    # Use points_to_add in the response message
+    return {"detail": f"{points_to_add} points added.", "total_points": current_user.dllm_tokens}
 
-@app.get("/leaderboard/users", response_model=List[schemas.LeaderboardUser]) # Assuming schema exists
-def get_user_leaderboard(db: Session = Depends(get_db)): # Add db dependency
-    # Replace dummy data with actual query
-    users = db.query(models.User)\
-              .filter(models.User.dllm_tokens != None)\
-              .order_by(models.User.dllm_tokens.desc())\
-              .limit(10)\
-              .all()
-    
-    leaderboard = []
-    for u in users:
-         leaderboard.append({
-             "username": u.name or u.email.split('@')[0], # Use name or part of email
-             "profile_picture": u.profile_picture if hasattr(u, 'profile_picture') else None,
-             "score": u.dllm_tokens
-         })
-    return leaderboard
-
-@app.get("/leaderboard/agents", response_model=List[schemas.LeaderboardAgent]) # Assuming schema exists
-def get_agent_leaderboard():
-     # This likely remains dummy data unless you track agent performance server-side
+@app.get("/leaderboard/users", response_model=List[schemas.LeaderboardUser])
+def get_user_leaderboard():
+    # ... (existing code - replace with actual DB query later)
+    # Example:
+    # users = db.query(models.User).order_by(models.User.dllm_tokens.desc()).limit(10).all()
+    # return [{"username": u.name or u.email, "profile_picture": u.profile_picture, "score": u.dllm_tokens} for u in users]
     return [
-        {"agent_name": "GPT-4 Turbo", "agent_link": "#", "score": 98},
-        {"agent_name": "Claude 3 Opus", "agent_link": "#", "score": 97},
-        {"agent_name": "Llama-3-70B", "agent_link": "#", "score": 95},
+        {"username": "John Doe", "profile_picture": None, "score": 90},
+        {"username": "Jane Smith", "profile_picture": None, "score": 50},
+        {"username": "Rohabn", "profile_picture": None, "score": 80},
+        {"username": "Jake", "profile_picture": None, "score": 70},
+        {"username": "Dan", "profile_picture": None, "score": 78},
         # ... other dummy data
     ]
 
-# GET endpoint for sign up redirection (keep as is)
+@app.get("/leaderboard/agents", response_model=List[schemas.LeaderboardAgent])
+def get_agent_leaderboard():
+     # ... (existing code - replace with actual data if available)
+    return [
+        {"agent_name": "GPT-2 Turbo", "agent_link": "#", "score": 98},
+        {"agent_name": "Claude 2", "agent_link": "#", "score": 95},
+        {"agent_name": "Tinyllama:1b", "agent_link": "#", "score": 98},
+        {"agent_name": "Llama:3b", "agent_link": "#", "score": 98},
+        {"agent_name": "Tinyllama:1.1b", "agent_link": "#", "score": 98},
+        
+        # ... other dummy data
+    ]
+
+# GET endpoint for sign up redirection
 @app.get("/signup")
 def signup():
-    return RedirectResponse(url="#") # Or your actual signup page URL
+    # ... (existing code)
+    return RedirectResponse(url="#")
 
-# Endpoint for updating wallet address (keep if needed)
-@app.patch("/user/wallet", response_model=schemas.WalletResponse) # Assuming schema exists
+@app.patch("/user/wallet", response_model=schemas.WalletResponse)
 def update_wallet_address(
-    wallet_update: schemas.WalletUpdate, # Assuming schema exists
+    wallet_update: schemas.WalletUpdate,
     token: str = Depends(auth.oauth2_scheme),
     db: Session = Depends(get_db)
 ):
+    """
+    Update the user's Aptos wallet address
+    - Validates Aptos address format (0x + 64 hex chars)
+    - Ensures address is unique across users
+    """
+    # Authenticate user
     current_user = auth.get_current_user(token, db)
+    
+    # Validate Aptos address format
     if not re.match(r'^0x[0-9a-fA-F]{64}$', wallet_update.wallet_address):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Aptos address format."
+            detail="Invalid Aptos address format. Must be 0x followed by 64 hex characters."
         )
+    
+    # Check if address is already in use by another user
     existing_user = db.query(models.User).filter(
         models.User.wallet_address == wallet_update.wallet_address,
         models.User.id != current_user.id
     ).first()
+    
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This wallet address is already associated with another account."
         )
+    
+    # Update the wallet address
     current_user.wallet_address = wallet_update.wallet_address
     db.commit()
     db.refresh(current_user)
+    
     return {
         "message": "Wallet address updated successfully",
         "wallet_address": current_user.wallet_address
     }
 
-# Endpoint for checking wallet availability (keep if needed)
 @app.get("/wallet/check-availability/{wallet_address}")
-def check_wallet_availability(wallet_address: str, db: Session = Depends(get_db)):
+def check_wallet_availability(
+    wallet_address: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a wallet address is available (not already registered)
+    - Returns 400 for invalid format
+    - Returns 200 with availability status
+    """
     if not re.match(r'^0x[0-9a-fA-F]{64}$', wallet_address):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Aptos address format."
+            detail="Invalid Aptos address format. Must be 0x followed by 64 hex characters."
         )
+    
     exists = db.query(models.User).filter(
         models.User.wallet_address == wallet_address
     ).first() is not None
+    
     return {"available": not exists}
 
-
-# GET endpoint for survey redirection (keep as is)
+# GET endpoint for survey redirection
 @app.get("/survey")
 def survey():
-    # return RedirectResponse(url="YOUR_SURVEY_URL") # Point to actual survey
+     # ... (existing code)
     return {"message": "ComputeMesh Survey is Coming Soon, Hang Tight!🚀"}
 
-# GET endpoint for all agents (keep as is or implement)
+# GET endpoint for survey redirection
 @app.get("/leaderboard/agents/all")
 def get_all_agents(): # Renamed function slightly
+    # ... (existing code)
     return {"message": "Cooking. Hang Tight!🚀"}

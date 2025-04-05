@@ -99,3 +99,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[Dict[str, Any]]
     usage: Dict[str, int]
+
+
+class PointsRequest(BaseModel):
+    points: int
