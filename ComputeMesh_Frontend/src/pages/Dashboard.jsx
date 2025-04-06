@@ -43,7 +43,7 @@ const Toast = ({ message, type = "info", onClose }) => {
 
 function Dashboard() {
   const { user, setUser } = useAuth()
-  const walletAddress = "0x1234...abcd"
+  const walletAddress = "0x005fe...0f372"
   const [selectedModel, setSelectedModel] = useState("tinyllama:1b")
   const [customModelUrl, setCustomModelUrl] = useState("")
   const [chatHistory, setChatHistory] = useState([])
