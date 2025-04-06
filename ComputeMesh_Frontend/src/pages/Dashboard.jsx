@@ -20,6 +20,27 @@ import {
   Menu,
 } from "lucide-react"
 
+// Toast Component
+const Toast = ({ message, type = "info", onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 5000)
+    return () => clearTimeout(timer)
+  }, [onClose])
+
+  return (
+    <div
+      className={`fixed bottom-20 right-4 z-50 p-4 rounded-lg shadow-lg text-sm max-w-sm animate-fade-in ${
+        type === "success" ? "bg-green-500" : type === "error" ? "bg-red-500" : "bg-[#7814E3]"
+      } text-white`}
+    >
+      {message}
+      <button onClick={onClose} className="ml-2 text-white hover:text-gray-200">
+        ×
+      </button>
+    </div>
+  )
+}
+
 function Dashboard() {
   const { user, setUser } = useAuth()
   const walletAddress = "0x1234...abcd"
@@ -44,29 +65,47 @@ function Dashboard() {
   const [isModelLoading, setIsModelLoading] = useState(false)
   const [downloadTasks, setDownloadTasks] = useState({})
   const [loadedModel, setLoadedModel] = useState(null)
+  const [toasts, setToasts] = useState([])
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  // Initialize theme, chat history, and models
+  // Utility to generate random hash
+  const generateHash = () => {
+    return "0x" + Math.random().toString(16).substr(2, 40)
+  }
+
+  // Utility to generate random node ID
+  const generateNodeId = () => {
+    return "node_" + Math.random().toString(36).substr(2, 8)
+  }
+
+  // Add toast notification
+  const addToast = (message, type = "info") => {
+    const id = Date.now()
+    setToasts((prev) => [...prev, { id, message, type }])
+  }
+
+  // Remove toast
+  const removeToast = (id) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id))
+  }
+
   useEffect(() => {
-    // Load theme preference
     const savedTheme = localStorage.getItem("theme")
     if (savedTheme === "dark") {
       setDarkMode(true)
     } else if (savedTheme === "light") {
       setDarkMode(false)
-    } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
       setDarkMode(true)
     }
 
-    // Load chat history
     const savedHistory = localStorage.getItem("chatHistory")
     if (savedHistory) {
       try {
         const parsedHistory = JSON.parse(savedHistory)
         setChatHistory(parsedHistory)
-
         if (parsedHistory.length > 0) {
           setActiveChat(parsedHistory[0].id)
           setMessages(parsedHistory[0].messages || [])
@@ -76,7 +115,6 @@ function Dashboard() {
       }
     }
 
-    // Load model preference
     const savedModel = localStorage.getItem("selectedModel")
     if (savedModel) {
       setSelectedModel(savedModel)
@@ -86,15 +124,11 @@ function Dashboard() {
       }
     }
 
-    // Fetch available models and current status
     fetchModelsAndStatus()
-
-    // Set up polling for model status
     const statusInterval = setInterval(fetchModelsAndStatus, 10000)
     return () => clearInterval(statusInterval)
   }, [])
 
-  // Save preferences
   useEffect(() => {
     localStorage.setItem("theme", darkMode ? "dark" : "light")
     document.documentElement.classList.toggle("dark", darkMode)
@@ -110,12 +144,10 @@ function Dashboard() {
     localStorage.setItem("selectedModel", selectedModel)
   }, [selectedModel])
 
-  // Scroll to bottom when messages change
   useEffect(() => {
     scrollToBottom()
   }, [messages])
 
-  // Handle typing animation
   useEffect(() => {
     if (isTyping && fullResponseText) {
       let currentIndex = 0
@@ -127,11 +159,15 @@ function Dashboard() {
           clearInterval(typingInterval)
           setIsTyping(false)
 
+          const nodeId = generateNodeId()
+          const responseHash = generateHash()
           const aiMessage = {
             id: Date.now(),
             role: "assistant",
             content: fullResponseText,
             timestamp: new Date().toISOString(),
+            nodeId,
+            responseHash,
           }
 
           const updatedMessages = [...messages, aiMessage]
@@ -139,9 +175,25 @@ function Dashboard() {
 
           if (activeChat) {
             setChatHistory(
-              chatHistory.map((chat) => (chat.id === activeChat ? { ...chat, messages: updatedMessages } : chat)),
+              chatHistory.map((chat) =>
+                chat.id === activeChat ? { ...chat, messages: updatedMessages } : chat
+              )
             )
           }
+
+          addToast(
+            `Response recorded on-chain\nHash: ${responseHash}\nNode: ${nodeId}`,
+            "success"
+          )
+          
+          // Simulate transaction
+          setTimeout(() => {
+            const providerAddress = "0x" + Math.random().toString(16).substr(2, 40)
+            addToast(
+              `Transaction completed: 0.1 APT sent to provider\nAddress: ${providerAddress}`,
+              "success"
+            )
+          }, 2000)
 
           setFullResponseText("")
         }
@@ -240,7 +292,6 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) throw new Error("No authentication token found")
 
-      // Pull the model
       const pullResponse = await fetch("https://hackbyte3-0.onrender.com/v1/models/pull", {
         method: "POST",
         headers: {
@@ -259,24 +310,16 @@ function Dashboard() {
       const pullData = await pullResponse.json()
       const modelId = pullData.task?.id || modelUrl
 
-      // Set as selected model
       setSelectedModel(modelId)
       setIsCustomUrlActive(false)
       setIsModelDropdownOpen(false)
 
-      // Wait a bit for the download to start before checking status
       await new Promise(resolve => setTimeout(resolve, 2000))
       await fetchModelsAndStatus()
 
     } catch (error) {
       console.error("Error pulling model:", error)
-      const errorMessage = {
-        id: Date.now(),
-        role: "assistant",
-        content: `Failed to download model: ${error.message}`,
-        timestamp: new Date().toISOString(),
-      }
-      setMessages([...messages, errorMessage])
+      addToast(`Failed to download model: ${error.message}`, "error")
     } finally {
       setIsModelLoading(false)
     }
@@ -285,17 +328,21 @@ function Dashboard() {
   const sendMessage = async () => {
     if (!inputValue.trim() || isLoading || isTyping) return
 
+    const queryHash = generateHash()
     const userMessage = {
       id: Date.now(),
       role: "user",
       content: inputValue,
       timestamp: new Date().toISOString(),
+      queryHash,
     }
 
     const updatedMessages = [...messages, userMessage]
     setMessages(updatedMessages)
     setInputValue("")
     setIsLoading(true)
+
+    addToast(`Query recorded on-chain\nHash: ${queryHash}`, "success")
 
     try {
       const token = localStorage.getItem("token")
@@ -375,10 +422,12 @@ function Dashboard() {
       if (activeChat) {
         setChatHistory(
           chatHistory.map((chat) =>
-            chat.id === activeChat ? { ...chat, messages: [...updatedMessages, errorMessage] } : chat,
-          ),
+            chat.id === activeChat ? { ...chat, messages: [...updatedMessages, errorMessage] } : chat
+          )
         )
       }
+
+      addToast(`Error: ${error.message}`, "error")
 
       if (error.message.includes("401")) {
         setUser(null)
@@ -436,11 +485,9 @@ function Dashboard() {
     <div className={`flex min-h-screen flex-col md:flex-row ${darkMode ? "dark bg-[#161616]" : "bg-gray-50"} transition-colors duration-300`}>
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-64 transform ${sidebarOpen ? "translate-x-0" : "-translate-x-full"
-          } 
+        className={`fixed inset-y-0 left-0 z-50 w-64 transform ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} 
         ${darkMode ? "bg-[#111111]" : "bg-[#ebeaea] border-r border-gray-200"} flex flex-col transition-transform duration-300 ease-in-out`}
       >
-        {/* Sidebar Header */}
         <div className="p-4 border-b border-opacity-10 border-gray-300 flex justify-between items-center">
           <div className="text-xl font-semibold flex items-center">
             <span className={`${darkMode ? "text-white" : "text-gray-800"}`}>ComputeMesh</span>
@@ -455,11 +502,9 @@ function Dashboard() {
           </button>
         </div>
 
-        {/* New Chat Button */}
         <div className="px-4 pt-2 pb-4">
           <button
-            className={`flex items-center justify-center w-full p-3 ${darkMode ? "bg-[#7814E3]" : "bg-[#7814E3]"
-              } bg-opacity-90 rounded-md text-white font-medium hover:bg-opacity-100 transition-all shadow-sm`}
+            className={`flex items-center justify-center w-full p-3 ${darkMode ? "bg-[#7814E3]" : "bg-[#7814E3]"} bg-opacity-90 rounded-md text-white font-medium hover:bg-opacity-100 transition-all shadow-sm`}
             onClick={createNewChat}
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -467,15 +512,13 @@ function Dashboard() {
           </button>
         </div>
 
-        {/* Chat History */}
         <div className="flex-1 overflow-y-auto px-3">
           <div className="py-3 text-sm flex justify-between items-center">
             <span className={`${darkMode ? "text-gray-400" : "text-gray-600"}`}>Recent chats</span>
             {chatHistory.length > 0 && (
               <button
                 onClick={clearAllChats}
-                className={`text-xs ${darkMode ? "text-gray-500 hover:text-gray-300" : "text-gray-600 hover:text-gray-700"
-                  } transition-colors`}
+                className={`text-xs ${darkMode ? "text-gray-500 hover:text-gray-300" : "text-gray-600 hover:text-gray-700"} transition-colors`}
                 title="Clear all chats"
               >
                 <Trash2 className="w-3 h-3" />
@@ -491,14 +534,15 @@ function Dashboard() {
               chatHistory.map((chat) => (
                 <div
                   key={chat.id}
-                  className={`flex items-center p-3 w-full text-left rounded-lg transition-all ${chat.id === activeChat
-                    ? darkMode
-                      ? "bg-[#222222] text-white"
-                      : "bg-gray-300 text-gray-900"
-                    : darkMode
+                  className={`flex items-center p-3 w-full text-left rounded-lg transition-all ${
+                    chat.id === activeChat
+                      ? darkMode
+                        ? "bg-[#222222] text-white"
+                        : "bg-gray-300 text-gray-900"
+                      : darkMode
                       ? "text-gray-300 hover:bg-[#1A1A1A]"
                       : "text-gray-700 hover:bg-gray-100"
-                    } group relative`}
+                  } group relative`}
                   onClick={() => loadChat(chat.id)}
                 >
                   <MessageSquare
@@ -511,8 +555,7 @@ function Dashboard() {
                           type="text"
                           value={editingTitle}
                           onChange={(e) => setEditingTitle(e.target.value)}
-                          className={`w-full ${darkMode ? "bg-[#333333] text-white" : "bg-[#e9eaec] text-gray-900"
-                            } text-sm rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[#7814E3]`}
+                          className={`w-full ${darkMode ? "bg-[#333333] text-white" : "bg-[#e9eaec] text-gray-900"} text-sm rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[#7814E3]`}
                           autoFocus
                         />
                         <button
@@ -533,16 +576,14 @@ function Dashboard() {
                     <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={(e) => startEditingChatTitle(chat.id, chat.title, e)}
-                        className={`${darkMode ? "text-gray-400 hover:text-white" : "text-gray-600 hover:text-gray-700"
-                          }`}
+                        className={`${darkMode ? "text-gray-400 hover:text-white" : "text-gray-600 hover:text-gray-700"}`}
                         title="Rename"
                       >
                         <Edit className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => deleteChat(chat.id, e)}
-                        className={`${darkMode ? "text-gray-400 hover:text-[#7814E3]" : "text-gray-600 hover:text-[#7814E3]"
-                          }`}
+                        className={`${darkMode ? "text-gray-400 hover:text-[#7814E3]" : "text-gray-600 hover:text-[#7814E3]"}`}
                         title="Delete"
                       >
                         <Trash2 className="w-3 h-3" />
@@ -555,7 +596,6 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Wallet Address */}
         <div className={`p-4 border-t ${darkMode ? "border-[#222222]" : "border-gray-300"}`}>
           <div className={`flex items-center p-2 rounded-md text-sm ${darkMode ? "bg-[#1A1A1A]" : "bg-[#d0d1d2]"}`}>
             <span className={`${darkMode ? "text-gray-400" : "text-gray-800"} mr-2`}>Wallet:</span>
@@ -566,13 +606,12 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Main Content Container */}
+      {/* Main Content */}
       <div className={`flex-1 flex flex-col ${sidebarOpen ? "md:ml-64" : "md:ml-0"} transition-all duration-300`}>
-        {/* Fixed Header */}
         <header
           className={`fixed top-0 left-0 right-0 z-40 ${sidebarOpen ? "md:ml-64" : "md:ml-0"} 
-  ${darkMode ? "bg-[#111111] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"} 
-  border-b py-3 px-4 sm:px-6 flex items-center justify-between transition-colors duration-300`}
+          ${darkMode ? "bg-[#111111] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"} 
+          border-b py-3 px-4 sm:px-6 flex items-center justify-between transition-colors duration-300`}
         >
           <div className="flex items-center space-x-2 w-full">
             {!sidebarOpen && (
@@ -587,8 +626,8 @@ function Dashboard() {
             <div className="relative flex-1 min-w-0">
               <button
                 className={`flex items-center justify-between w-full text-sm font-medium min-w-0 
-        ${darkMode ? "bg-[#1A1A1A] hover:bg-[#222222] text-white" : "bg-[#e9eaec] hover:bg-gray-200 text-gray-700"} 
-        rounded-md px-3 py-2 transition-colors duration-200`}
+                ${darkMode ? "bg-[#1A1A1A] hover:bg-[#222222] text-white" : "bg-[#e9eaec] hover:bg-gray-200 text-gray-700"} 
+                rounded-md px-3 py-2 transition-colors duration-200`}
                 onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
                 disabled={isModelLoading}
               >
@@ -623,24 +662,23 @@ function Dashboard() {
 
               {isModelDropdownOpen && (
                 <div
-                  className={`absolute top-full left-0 mt-2 w-full sm:w-80 ${darkMode ? "bg-[#1A1A1A] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"
-                    } rounded-lg shadow-lg border z-10 transition-colors duration-300`}
+                  className={`absolute top-full left-0 mt-2 w-full sm:w-80 ${darkMode ? "bg-[#1A1A1A] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"} rounded-lg shadow-lg border z-10 transition-colors duration-300`}
                 >
                   <div className="py-2 max-h-96 overflow-y-auto">
                     {availableModels.map((model) => (
                       <button
                         key={model.id}
-                        className={`w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-200" : "hover:bg-gray-200 text-gray-700"
-                          } text-sm transition-colors duration-200 ${selectedModel === model.id
+                        className={`w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-200" : "hover:bg-gray-200 text-gray-700"} text-sm transition-colors duration-200 ${
+                          selectedModel === model.id
                             ? darkMode
                               ? "bg-[#222222]"
                               : "bg-gray-200"
                             : ""
-                          }`}
+                        }`}
                         onClick={() => {
-                          setSelectedModel(model.id);
-                          setIsCustomUrlActive(false);
-                          setIsModelDropdownOpen(false);
+                          setSelectedModel(model.id)
+                          setIsCustomUrlActive(false)
+                          setIsModelDropdownOpen(false)
                         }}
                       >
                         <div className="flex justify-between items-center">
@@ -649,7 +687,6 @@ function Dashboard() {
                         </div>
                       </button>
                     ))}
-                    {/* Rest of the dropdown content remains unchanged */}
                     <div className={`border-t ${darkMode ? "border-[#222222]" : "border-gray-200"} my-2`}></div>
                     <div className="px-4 py-3">
                       <div className="flex justify-between items-center mb-2">
@@ -664,17 +701,17 @@ function Dashboard() {
                           <ExternalLink className="w-3 h-3 ml-1" />
                         </button>
                       </div>
-
                       <form onSubmit={handleCustomUrlSubmit} className="flex items-center space-x-2">
                         <input
                           type="text"
                           value={customModelUrl}
                           onChange={(e) => setCustomModelUrl(e.target.value)}
                           placeholder="Enter Hugging Face model URL"
-                          className={`flex-1 text-sm p-2 rounded-md ${darkMode
-                            ? "bg-[#2A2A2A] border-[#333333] text-white placeholder-gray-400"
-                            : "bg-[#e9eaec] border-gray-200 text-gray-900 placeholder-gray-500"
-                            } border focus:outline-none focus:ring-1 focus:ring-[#7814E3]`}
+                          className={`flex-1 text-sm p-2 rounded-md ${
+                            darkMode
+                              ? "bg-[#2A2A2A] border-[#333333] text-white placeholder-gray-400"
+                              : "bg-[#e9eaec] border-gray-200 text-gray-900 placeholder-gray-500"
+                          } border focus:outline-none focus:ring-1 focus:ring-[#7814E3]`}
                         />
                         <button
                           type="submit"
@@ -684,7 +721,7 @@ function Dashboard() {
                           {isModelLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Use"}
                         </button>
                       </form>
-                    </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -694,8 +731,7 @@ function Dashboard() {
           <div className="flex items-center space-x-3">
             <button
               onClick={toggleTheme}
-              className={`p-2 rounded-md ${darkMode ? "bg-[#1A1A1A] hover:bg-[#222222]" : "bg-[#e9eaec] hover:bg-gray-200"
-                } transition-colors duration-200`}
+              className={`p-2 rounded-md ${darkMode ? "bg-[#1A1A1A] hover:bg-[#222222]" : "bg-[#e9eaec] hover:bg-gray-200"} transition-colors duration-200`}
               title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
             >
               {darkMode ? <Sun className="w-5 h-5 text-gray-300" /> : <Moon className="w-5 h-5 text-gray-700" />}
@@ -713,8 +749,7 @@ function Dashboard() {
 
               {isProfileDropdownOpen && (
                 <div
-                  className={`absolute top-full right-0 mt-2 w-56 ${darkMode ? "bg-[#1A1A1A] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"
-                    } rounded-lg shadow-lg border z-10 transition-colors duration-300`}
+                  className={`absolute top-full right-0 mt-2 w-56 ${darkMode ? "bg-[#1A1A1A] border-[#222222]" : "bg-[#f3f4f6] border-gray-200"} rounded-lg shadow-lg border z-10 transition-colors duration-300`}
                 >
                   <div className={`p-3 border-b ${darkMode ? "border-[#222222]" : "border-gray-200"}`}>
                     <div className={`font-medium text-sm ${darkMode ? "text-white" : "text-gray-900"}`}>
@@ -726,19 +761,17 @@ function Dashboard() {
                   </div>
                   <div className="py-2">
                     <button
-                      className={`flex items-center w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-300" : "hover:bg-gray-200 text-gray-700"
-                        } text-sm transition-colors duration-200`}
+                      className={`flex items-center w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-300" : "hover:bg-gray-200 text-gray-700"} text-sm transition-colors duration-200`}
                     >
                       <Settings className="w-4 h-4 mr-2" />
                       Settings
                     </button>
                     <button
-                      className={`flex items-center w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-300" : "hover:bg-gray-200 text-gray-700"
-                        } text-sm transition-colors duration-200`}
+                      className={`flex items-center w-full text-left px-4 py-2 ${darkMode ? "hover:bg-[#222222] text-gray-300" : "hover:bg-gray-200 text-gray-700"} text-sm transition-colors duration-200`}
                       onClick={() => {
-                        localStorage.removeItem("token");
-                        localStorage.removeItem("user");
-                        setUser(null);
+                        localStorage.removeItem("token")
+                        localStorage.removeItem("user")
+                        setUser(null)
                       }}
                     >
                       <LogOut className="w-4 h-4 mr-2" />
@@ -751,11 +784,9 @@ function Dashboard() {
           </div>
         </header>
 
-        {/* Chat Content Area */}
+        {/* Chat Content */}
         <div
-          className={`flex-1 overflow-y-auto px-4 sm:px-6 py-4 
-          ${darkMode ? "bg-[#161616]" : "bg-gray-50"} transition-colors duration-300 
-          pt-[80px] pb-[140px]`}
+          className={`flex-1 overflow-y-auto px-4 sm:px-6 py-4 ${darkMode ? "bg-[#161616]" : "bg-gray-50"} transition-colors duration-300 pt-[80px] pb-[140px]`}
         >
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
@@ -773,8 +804,7 @@ function Dashboard() {
                 </p>
                 {isCustomUrlActive && (
                   <div
-                    className={`${darkMode ? "bg-[#1A1A1A]" : "bg-[#e9eaec] border border-gray-200"
-                      } p-4 rounded-lg inline-block shadow-sm`}
+                    className={`${darkMode ? "bg-[#1A1A1A]" : "bg-[#e9eaec] border border-gray-200"} p-4 rounded-lg inline-block shadow-sm`}
                   >
                     <p className={`text-sm ${darkMode ? "text-gray-300" : "text-gray-700"}`}>Using custom model:</p>
                     <p className="text-xs sm:text-sm font-mono text-[#7814E3] mt-1 truncate max-w-[250px]">
@@ -792,26 +822,38 @@ function Dashboard() {
                   className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-3 ${message.role === "user"
-                      ? darkMode
-                        ? "bg-[#7814E3] text-white"
-                        : "bg-[#7814E3] bg-opacity-10 text-gray-50"
-                      : darkMode
+                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-3 ${
+                      message.role === "user"
+                        ? darkMode
+                          ? "bg-[#7814E3] text-white"
+                          : "bg-[#7814E3] bg-opacity-10 text-gray-50"
+                        : darkMode
                         ? "bg-[#222222] text-gray-100"
                         : "bg-[#e9eaec] text-gray-800 border border-gray-200 shadow-sm"
-                      }`}
+                    }`}
                   >
                     <div className="whitespace-pre-wrap text-sm sm:text-base">{message.content}</div>
+                    {message.queryHash && (
+                      <div className={`text-xs mt-2 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                        Query Hash: {message.queryHash}
+                      </div>
+                    )}
+                    {message.responseHash && (
+                      <div className={`text-xs mt-2 ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                        Response Hash: {message.responseHash} | Node: {message.nodeId}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
               {isTyping && (
                 <div className="flex justify-start">
                   <div
-                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-3 ${darkMode
-                      ? "bg-[#222222] text-gray-100"
-                      : "bg-[#e9eaec] text-gray-800 border border-gray-200 shadow-sm"
-                      }`}
+                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-3 ${
+                      darkMode
+                        ? "bg-[#222222] text-gray-100"
+                        : "bg-[#e9eaec] text-gray-800 border border-gray-200 shadow-sm"
+                    }`}
                   >
                     <div className="whitespace-pre-wrap text-sm sm:text-base">{typingText}</div>
                   </div>
@@ -820,10 +862,11 @@ function Dashboard() {
               {isLoading && !isTyping && (
                 <div className="flex justify-start">
                   <div
-                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-4 ${darkMode
-                      ? "bg-[#222222] text-gray-100"
-                      : "bg-[#e9eaec] text-gray-800 border border-gray-200 shadow-sm"
-                      }`}
+                    className={`max-w-[90%] sm:max-w-xl rounded-xl px-4 sm:px-5 py-4 ${
+                      darkMode
+                        ? "bg-[#222222] text-gray-100"
+                        : "bg-[#e9eaec] text-gray-800 border border-gray-200 shadow-sm"
+                    }`}
                   >
                     <div className="flex space-x-2 justify-center">
                       <div className="w-2 h-2 rounded-full bg-[#7814E3] animate-bounce"></div>
@@ -845,7 +888,7 @@ function Dashboard() {
         </div>
 
         {/* Input Area */}
-        <div//
+        <div
           className={`fixed bottom-0 left-0 right-0 z-40 ${sidebarOpen ? "md:ml-64" : "md:ml-0"} 
           ${darkMode ? "border-[#222222] bg-[#111111]" : "border-gray-200 bg-[#f3f4f6]"} 
           border-t px-4 sm:px-6 py-4 transition-colors duration-300`}
@@ -860,8 +903,7 @@ function Dashboard() {
               disabled={isLoading || isTyping}
               rows={1}
               className={`w-full p-3 sm:p-4 pr-12 sm:pr-16 rounded-lg resize-none 
-              ${darkMode ? "bg-[#1A1A1A] border-[#222222] text-white placeholder-gray-400 focus:ring-[#7814E3]"
-                  : "bg-[#e9eaec] border-gray-200 text-gray-900 placeholder-gray-500 focus:ring-[#7814E3]"} 
+              ${darkMode ? "bg-[#1A1A1A] border-[#222222] text-white placeholder-gray-400 focus:ring-[#7814E3]" : "bg-[#e9eaec] border-gray-200 text-gray-900 placeholder-gray-500 focus:ring-[#7814E3]"} 
               border focus:outline-none focus:ring-2 focus:border-transparent transition-colors duration-200 shadow-sm text-sm sm:text-base`}
               style={{ minHeight: "50px", maxHeight: "150px" }}
             />
@@ -869,8 +911,7 @@ function Dashboard() {
               onClick={sendMessage}
               disabled={!inputValue.trim() || isLoading || isTyping}
               className={`absolute right-2 sm:right-3 top-1/2 transform -translate-y-1/2 p-2 rounded-md 
-              ${!inputValue.trim() || isLoading || isTyping ? "bg-gray-400 cursor-not-allowed"
-                  : "bg-[#7814E3] hover:bg-[#7814e3e9] shadow-sm"} text-white transition-all`}
+              ${!inputValue.trim() || isLoading || isTyping ? "bg-gray-400 cursor-not-allowed" : "bg-[#7814E3] hover:bg-[#7814e3e9] shadow-sm"} text-white transition-all`}
             >
               <Send className="w-4 sm:w-5 h-4 sm:h-5" />
             </button>
@@ -879,9 +920,19 @@ function Dashboard() {
             ComputeMesh may produce inaccurate information about blockchain data or transactions.
           </div>
         </div>
+
+        {/* Toast Notifications */}
+        {toasts.map((toast) => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            onClose={() => removeToast(toast.id)}
+          />
+        ))}
       </div>
     </div>
-  );
+  )
 }
 
-export default Dashboard;
+export default Dashboard
