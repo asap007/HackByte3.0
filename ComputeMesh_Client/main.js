@@ -104,7 +104,7 @@ function createWindow() {
     // Remove the application menu completely
     mainWindow.removeMenu();
 
-    const startUrl = path.join(__dirname, 'out', 'index.html');
+    const startUrl = path.join(__dirname, 'frontend', 'out', 'index.html');
     mainWindow.loadFile(startUrl);
 
     mainWindow.once('ready-to-show', () => {

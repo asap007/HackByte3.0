@@ -56,7 +56,7 @@ export default function Dashboard() {
     const registerDevice = async () => {
       try {
         const deviceId = await window.electronAPI.getMachineId();
-        await axios.post('https://hackbyte3-0.onrender.com/device-registration', {
+        await axios.post('http://localhost:8000/device-registration', {
           device_id: deviceId
         }, {
           headers: {
@@ -74,7 +74,7 @@ export default function Dashboard() {
 
   const validateToken = async (token: string) => {
     try {
-      const response = await axios.get('https://hackbyte3-0.onrender.com/user', {
+      const response = await axios.get('http://localhost:8000/user', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       setUserData(response.data)
@@ -93,7 +93,7 @@ export default function Dashboard() {
     localStorage.removeItem('explicitLogout');
 
     try {
-      const response = await axios.get('https://hackbyte3-0.onrender.com/user', {
+      const response = await axios.get('http://localhost:8000/user', {
         headers: { 'Authorization': `Bearer ${receivedToken}` }
       })
       setUserData(response.data)
@@ -148,7 +148,7 @@ export default function Dashboard() {
     try {
       // Save wallet address to user profile
       const response = await axios.patch(
-        'https://hackbyte3-0.onrender.com/user/wallet',
+        'http://localhost:8000/user/wallet',
         { wallet_address: walletAddress },
         { headers: { 'Authorization': `Bearer ${token}` } }
       );

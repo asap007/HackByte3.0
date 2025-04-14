@@ -34,7 +34,7 @@ export function LoginForm({ onLogin, onForgotPassword, onSignup }: LoginFormProp
     
     try {
       const response = await axios.post(
-        'https://hackbyte3-0.onrender.com/token', 
+        'http://localhost:8000/token', 
         new URLSearchParams({
           username: email,
           password: password
@@ -135,7 +135,7 @@ export function LoginForm({ onLogin, onForgotPassword, onSignup }: LoginFormProp
                 type="button"
                 onClick={(e) => {
                   e.preventDefault();
-                  openInBrowser('https://hackbyte3-0.onrender.com/signup');
+                  openInBrowser('http://localhost:8000/signup');
                 }}
                 className="ml-2 text-blue-400 hover:text-blue-300"
               >

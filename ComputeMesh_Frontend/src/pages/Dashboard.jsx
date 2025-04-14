@@ -208,7 +208,7 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) return
 
-      const response = await fetch("https://hackbyte3-0.onrender.com/v1/models/status", {
+      const response = await fetch("http://localhost:8000/v1/models/status", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -292,7 +292,7 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) throw new Error("No authentication token found")
 
-      const pullResponse = await fetch("https://hackbyte3-0.onrender.com/v1/models/pull", {
+      const pullResponse = await fetch("http://localhost:8000/v1/models/pull", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -348,7 +348,7 @@ function Dashboard() {
       const token = localStorage.getItem("token")
       if (!token) throw new Error("No authentication token found")
 
-      const response = await fetch("https://hackbyte3-0.onrender.com/v1/chat/completions", {
+      const response = await fetch("http://localhost:8000/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -683,7 +683,6 @@ function Dashboard() {
                       >
                         <div className="flex justify-between items-center">
                           <span>{model.id}</span>
-                          {loadedModel === model.id && <Check className="w-4 h-4 text-[#7814E3]" />}
                         </div>
                       </button>
                     ))}

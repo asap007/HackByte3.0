@@ -1,40 +1,27 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, EmailStr, Field, validator
+from typing import List, Optional, Dict, Any, Literal
 import re
+from datetime import datetime # Ensure datetime is imported if used
+
+# Define allowed user types
+UserType = Literal['user', 'provider']
 
 class UserBase(BaseModel):
-    email: str
+    email: EmailStr
     name: Optional[str] = None
-    wallet_address: Optional[str] = None
+    user_type: UserType = 'user' # Added user_type with default
 
 class UserCreate(UserBase):
     password: str
 
 class UserOut(UserBase):
     id: int
+    # Removed wallet_address
 
     class Config:
-        orm_mode = True
+        orm_mode = True # Keep orm_mode for database model mapping
 
-class WalletUpdate(BaseModel):
-    wallet_address: str
-
-    @classmethod
-    def validate_wallet_address(cls, v):
-        if not re.match(r'^0x[0-9a-fA-F]{64}$', v):
-            raise ValueError('Invalid Aptos address format')
-        return v
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "wallet_address": "0x03f93542dd877b075a37d629c7c021f33b572e8d336e73511ad481c9b0560698"
-            }
-        }
-
-class WalletResponse(BaseModel):
-    message: str
-    wallet_address: Optional[str] = None
+# Removed WalletUpdate and WalletResponse schemas
 
 class Token(BaseModel):
     access_token: str
@@ -53,10 +40,13 @@ class ErrorResponse(BaseModel):
     command_id: Optional[str] = None
     error: str
 
-class UserDashboard(UserBase):
+class UserDashboard(BaseModel): # Changed inheritance from UserBase as it doesn't need user_type here potentially
+    email: EmailStr
+    name: Optional[str] = None
     profile_picture: Optional[str] = None
     dllm_tokens: int
     referral_link: Optional[str] = None
+    # Removed wallet_address
 
 class PublicStats(BaseModel):
     active_nodes: int
@@ -71,7 +61,7 @@ class LeaderboardUser(BaseModel):
     username: str
     profile_picture: Optional[str] = None
     score: int
-    wallet_address: Optional[str] = None  # Added for leaderboard
+    # Removed wallet_address
 
 class LeaderboardAgent(BaseModel):
     agent_name: str
@@ -100,6 +90,18 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Dict[str, Any]]
     usage: Dict[str, int]
 
-
 class PointsRequest(BaseModel):
     points: int
+
+# New/Modified Schemas for API endpoints
+
+class DeviceRegistrationRequest(BaseModel): # Added this schema definition if it wasn't explicit
+    device_id: str
+
+class ModelPullRequest(BaseModel):
+    model: str
+    name: Optional[str] = None
+
+class ModelListResponse(BaseModel): # Schema for /v1/models and /v1/models/status
+    data: List[Dict[str, Any]] = []
+    provider_id: Optional[int] = None # Indicate which provider responded (optional)
