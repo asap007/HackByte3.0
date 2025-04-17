@@ -56,7 +56,7 @@ export function Leaderboard() {
 
   const fetchUserData = async () => {
     try {
-      const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem("authToken");
       if (!token) {
         console.error("No auth token found");
         return;
@@ -64,8 +64,8 @@ export function Leaderboard() {
 
       const response = await fetch("http://localhost:8000/user", {
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          Authorization: `Bearer ${token}`,
+        },
       });
       const data = await response.json();
       setReferralLink(data.referral_link);
@@ -74,6 +74,7 @@ export function Leaderboard() {
     }
   };
 
+  // Fetch data on mount and set intervals for leaderboard and public stats
   useEffect(() => {
     fetchLeaderboardData();
     fetchPublicStats();
@@ -88,6 +89,18 @@ export function Leaderboard() {
     };
   }, []);
 
+  // Handle click outside to close invite link popup
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showInviteLink && !event.target.closest(".invite-popup")) {
+        setShowInviteLink(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showInviteLink]);
+
   const toggleInviteLink = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     setPopupPosition({ top: rect.bottom + window.scrollY, left: rect.left + window.scrollX });
@@ -100,17 +113,6 @@ export function Leaderboard() {
     setIsNotificationOpen(true);
     setShowInviteLink(false);
   };
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showInviteLink && !event.target.closest('.invite-popup')) {
-        setShowInviteLink(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showInviteLink]);
 
   return (
     <Card className="bg-[#1a1a2e] border-0">
@@ -150,26 +152,26 @@ export function Leaderboard() {
         </div>
 
         <div className="mt-4 space-y-2">
-          <Button 
-            onClick={toggleInviteLink} 
+          <Button
+            onClick={toggleInviteLink}
             className="w-full bg-purple-500 hover:bg-purple-600 text-white"
           >
             <Share2 className="w-4 h-4 mr-2" />
             Invite a friend and earn in Aptos
           </Button>
           {showInviteLink && (
-            <div 
-              className="absolute z-10 p-2 bg-gray-800 rounded-lg shadow-lg invite-popup" 
+            <div
+              className="absolute z-10 p-2 bg-gray-800 rounded-lg shadow-lg invite-popup"
               style={{ top: `${popupPosition.top}px`, left: `${popupPosition.left}px` }}
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-300 truncate mr-2">
                   {referralLink === null ? "Null" : referralLink}
                 </span>
-                <Button 
-                  onClick={copyInviteLink} 
-                  variant="ghost" 
-                  size="sm" 
+                <Button
+                  onClick={copyInviteLink}
+                  variant="ghost"
+                  size="sm"
                   className="text-gray-400 hover:text-gray-700"
                 >
                   <Copy className="w-4 h-4" />
