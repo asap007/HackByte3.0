@@ -23,6 +23,25 @@ function log(message, level = 'info') {
     }
 }
 
+// Function to kill processes by name
+async function killProcessByName(processName) {
+    if (process.platform === 'win32') {
+        try {
+            log(`Attempting to kill process by name: ${processName}`);
+            const taskkill = spawn('taskkill', ['/F', '/IM', processName]);
+            
+            return new Promise((resolve) => {
+                taskkill.on('close', (code) => {
+                    log(`Process ${processName} kill command exited with code ${code}`);
+                    resolve();
+                });
+            });
+        } catch (err) {
+            log(`Error killing process ${processName}: ${err.message}`, 'error');
+        }
+    }
+}
+
 async function cleanup() {
     if (isCleaningUp) return;
     isCleaningUp = true;
@@ -31,7 +50,33 @@ async function cleanup() {
         log('Starting cleanup process');
 
         if (serverProcess) {
-            serverProcess.kill('SIGTERM'); // Attempt graceful shutdown
+            // Get the PID of the server process
+            const pid = serverProcess.pid;
+            
+            // On Windows, use taskkill with forced termination
+            if (process.platform === 'win32' && pid) {
+                try {
+                    // First attempt with /F (force)
+                    const taskkill = spawn('taskkill', ['/F', '/PID', pid.toString()]);
+                    
+                    // Wait for taskkill to complete
+                    await new Promise((resolve) => {
+                        taskkill.on('close', resolve);
+                    });
+                    
+                    log(`Taskkill completed for PID ${pid}`);
+                } catch (err) {
+                    log(`Taskkill error: ${err.message}`, 'error');
+                }
+            } else {
+                // Non-Windows platforms
+                serverProcess.kill('SIGTERM');
+            }
+            
+            // Also try killing by name to be sure
+            await killProcessByName('ComputeMesh_main.exe');
+            
+            // Null the reference
             serverProcess = null;
         }
 
@@ -51,11 +96,20 @@ function launchServer() {
             throw new Error(`Server executable not found at ${SERVER_PATH}`);
         }
 
-        serverProcess = spawn(SERVER_PATH, [], {
-            stdio: 'pipe', // Capture output for logging
+        // More strict spawn options for Windows
+        const options = {
+            stdio: 'pipe',
             detached: false,
-            windowsHide: true // Hide the console window
-        });
+            windowsHide: true,
+            shell: false
+        };
+
+        // Add Windows-specific options
+        if (process.platform === 'win32') {
+            options.windowsVerbatimArguments = true;
+        }
+
+        serverProcess = spawn(SERVER_PATH, [], options);
 
         serverProcess.stdout.on('data', (data) => {
             log(`Server stdout: ${data.toString().trim()}`, 'debug');
@@ -114,18 +168,18 @@ function createWindow() {
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         shell.openExternal(url)
         return { action: 'deny' }
-      })
+    });
 
-     // Initialize updater after window creation
-     const updateHandler = new UpdateHandler(mainWindow);
+    // Initialize updater after window creation
+    const updateHandler = new UpdateHandler(mainWindow);
     
-     // Check for updates immediately
-     updateHandler.checkForUpdates();
+    // Check for updates immediately
+    updateHandler.checkForUpdates();
      
-     // Check for updates every 4 hours
-     setInterval(() => {
-         updateHandler.checkForUpdates();
-     }, 4 * 60 * 60 * 1000);
+    // Check for updates every 4 hours
+    setInterval(() => {
+        updateHandler.checkForUpdates();
+    }, 4 * 60 * 60 * 1000);
 
     mainWindow.on('close', async (e) => {
         if (!isQuitting) {
@@ -133,6 +187,7 @@ function createWindow() {
             isQuitting = true;
             try {
                 await cleanup();
+                await killProcessByName('ComputeMesh_main.exe');
                 if (!mainWindow.isDestroyed()) {
                     mainWindow.close();
                 }
@@ -149,7 +204,7 @@ function createWindow() {
 }
 
 ipcMain.handle('get-machine-id', () => {
-  return machineIdSync();
+    return machineIdSync();
 });
 
 ipcMain.on('request-server-port', (event) => {
@@ -179,7 +234,6 @@ ipcMain.handle('forward-request', async (event, { method, url, data }) => {
     }
 });
 
-
 async function initializeApp() {
     // Remove the menu bar completely for all windows
     Menu.setApplicationMenu(null);
@@ -193,15 +247,25 @@ async function initializeApp() {
 
         createWindow();
     } catch (err) {
-       console.error(err.message); // Debugging
+        console.error(err.message); // Debugging
     }
 }
 
 app.whenReady().then(initializeApp);
 
-app.on('before-quit', async () => {
-    isQuitting = true;
-    await cleanup();
+// Ensure cleanup runs when the app is about to quit
+app.on('before-quit', async (e) => {
+    if (!isQuitting) {
+        e.preventDefault();
+        isQuitting = true;
+        
+        await cleanup();
+        
+        // Direct approach to ensure ComputeMesh is killed
+        await killProcessByName('ComputeMesh_main.exe');
+        
+        app.quit();
+    }
 });
 
 app.on('window-all-closed', () => {
@@ -219,11 +283,13 @@ app.on('activate', () => {
 process.on('SIGINT', async () => {
     isQuitting = true;
     await cleanup();
+    await killProcessByName('ComputeMesh_main.exe');
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
     isQuitting = true;
     await cleanup();
+    await killProcessByName('ComputeMesh_main.exe');
     process.exit(0);
 });
